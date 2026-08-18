@@ -1,0 +1,7 @@
+node_modules/
+dist/
+temp-infinity-audit/
+.claude/settings.local.json
+
+.DS_Store
+Thumbs.db

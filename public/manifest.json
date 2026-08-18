@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Navigator 导航页",
+  "description": "美观的新标签页：自定义快捷方式 + 按访问频次自动推荐 + 多主题",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "chrome_url_overrides": {
+    "newtab": "index.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "optional_permissions": ["history"],
+  "permissions": ["storage", "favicon"],
+  "options_page": "index.html"
+}

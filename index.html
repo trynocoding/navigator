@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Navigator 新标签页</title>
+    <link rel="stylesheet" href="./src/newtab/styles/themes.css" />
+    <link rel="stylesheet" href="./src/newtab/styles/base.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">N</span>
+          <div class="brand-copy">
+            <strong>Navigator</strong>
+            <div class="clock">
+              <span id="clock-date"></span>
+              <span class="clock-dot" aria-hidden="true"></span>
+              <span id="clock-time"></span>
+            </div>
+          </div>
+        </div>
+        <button id="btn-settings" class="icon-btn" title="设置" aria-label="打开设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 13.4a7.7 7.7 0 0 0 .05-2.8l2-1.55-2-3.46-2.48 1a7.77 7.77 0 0 0-2.42-1.4L14.2 2.5h-4l-.35 2.69a7.77 7.77 0 0 0-2.42 1.4l-2.48-1-2 3.46 2 1.55a7.7 7.7 0 0 0 .05 2.8l-2.05 1.55 2 3.46 2.5-1a7.8 7.8 0 0 0 2.4 1.4l.35 2.69h4l.35-2.69a7.8 7.8 0 0 0 2.4-1.4l2.5 1 2-3.46-2.05-1.55Z"/></svg>
+        </button>
+      </header>
+
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow" id="greeting">专注你的下一站</p>
+        <h1 id="hero-title">今天，想从哪里开始？</h1>
+        <div class="search-wrap">
+          <div class="search-box">
+            <svg class="search-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+            <input
+              id="search-input"
+              type="text"
+              placeholder="搜索或输入网址"
+              autocomplete="off"
+              autofocus
+              spellcheck="false"
+              aria-label="搜索或输入网址"
+            />
+            <span class="search-divider" aria-hidden="true"></span>
+            <select id="engine-select" title="切换搜索引擎" aria-label="搜索引擎"></select>
+          </div>
+        </div>
+      </section>
+
+      <main class="workspace">
+        <section class="content-section" id="shortcuts-panel">
+          <div class="section-head">
+            <div>
+              <h2>我的快捷方式</h2>
+              <p class="section-description">拖拽即可排序，随手整理你的常用入口</p>
+            </div>
+            <button id="btn-add-shortcut" class="section-action">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              添加快捷方式
+            </button>
+          </div>
+          <div class="grid" id="shortcuts-grid"></div>
+          <p class="empty-hint" id="shortcuts-empty" hidden>
+            暂时没有快捷方式，添加后会显示在这里。
+          </p>
+        </section>
+
+        <section class="content-section recommend-section" id="recommend-panel">
+          <div class="section-head">
+            <div>
+              <h2>智能推荐</h2>
+              <p class="section-description">近 30 天内常去但尚未固定的网站 · 仅在本机分析</p>
+            </div>
+            <button id="btn-recommend-toggle" class="section-action section-action-secondary"></button>
+          </div>
+          <div class="grid" id="recommend-grid"></div>
+          <p class="empty-hint" id="recommend-hint" hidden></p>
+        </section>
+      </main>
+
+      <footer class="foot">
+        <span class="privacy-dot" aria-hidden="true"></span>
+        快捷方式和设置保存在 Chrome 同步存储中
+      </footer>
+    </div>
+
+    <script type="module" src="./src/newtab/main.js"></script>
+  </body>
+</html>
