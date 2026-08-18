@@ -32,6 +32,7 @@
         <p class="eyebrow" id="greeting">专注你的下一站</p>
         <h1 id="hero-title">今天，想从哪里开始？</h1>
         <div class="search-wrap">
+          <div class="search-shell">
           <div class="search-box">
             <svg class="search-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
             <input
@@ -42,9 +43,18 @@
               autofocus
               spellcheck="false"
               aria-label="搜索或输入网址"
+              role="combobox"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              aria-owns="search-results"
+              aria-autocomplete="list"
+              aria-controls="search-results"
             />
             <span class="search-divider" aria-hidden="true"></span>
             <select id="engine-select" title="切换搜索引擎" aria-label="搜索引擎"></select>
+          </div>
+          <div id="search-results" class="search-results" role="listbox" hidden></div>
+          <p class="search-shortcut-hint"><kbd>/</kbd> 或 <kbd>Ctrl K</kbd> 快速聚焦</p>
           </div>
         </div>
       </section>
@@ -56,12 +66,19 @@
               <h2>我的快捷方式</h2>
               <p class="section-description">拖拽即可排序，随手整理你的常用入口</p>
             </div>
+            <div class="section-actions">
+            <button id="btn-add-group" class="section-action section-action-secondary">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h6l2 2h8v10H4z"/><path d="M12 11v5M9.5 13.5h5"/></svg>
+              新建分组
+            </button>
             <button id="btn-add-shortcut" class="section-action">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
               添加快捷方式
             </button>
+            </div>
           </div>
-          <div class="grid" id="shortcuts-grid"></div>
+          <nav class="group-bar" id="shortcut-groups" aria-label="快捷方式分组"></nav>
+          <div class="shortcut-groups" id="shortcuts-grid"></div>
           <p class="empty-hint" id="shortcuts-empty" hidden>
             暂时没有快捷方式，添加后会显示在这里。
           </p>
@@ -85,6 +102,7 @@
         快捷方式和设置会同步，自定义图标仅保存在本机
       </footer>
     </div>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
     <script type="module" src="./src/newtab/main.js"></script>
   </body>

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   SHORTCUT_CHUNK_MAX_BYTES,
+  clearAllData,
   loadAll,
+  saveShortcutState,
   saveShortcuts,
 } from '../src/shared/storage.js';
 
@@ -70,7 +72,7 @@ test('大量快捷方式会被拆分为安全大小的多个同步项', async ()
 
   const loaded = await loadAll();
   assert.equal(loaded.shortcuts.length, shortcuts.length);
-  assert.deepEqual(loaded.shortcuts.at(-1), shortcuts.at(-1));
+  assert.deepEqual(loaded.shortcuts.at(-1), { ...shortcuts.at(-1), groupId: 'default' });
 });
 
 test('V1 单键数据自动迁移，首次保留回退数据，后续保存再清理', async () => {
@@ -115,7 +117,7 @@ test('元数据切换失败时仍读取上一代完整数据', async () => {
     Object.keys(sync.data).filter((key) => key.startsWith('nv_shortcuts_v2_')).sort(),
     committedChunkKeys,
   );
-  assert.deepEqual((await loadAll()).shortcuts, original);
+  assert.deepEqual((await loadAll()).shortcuts, original.map((item) => ({ ...item, groupId: 'default' })));
 });
 
 test('清空快捷方式会提交空元数据并移除上一代分片', async () => {
@@ -163,7 +165,7 @@ test('读取期间发生并发提交时会自动切换到最新一代', async ()
     return baseGet(keys);
   };
 
-  assert.deepEqual((await loadAll()).shortcuts, newRecords);
+  assert.deepEqual((await loadAll()).shortcuts, newRecords.map((item) => ({ ...item, groupId: 'default' })));
 });
 
 test('新版分片损坏时回退到迁移期保留的 V1 数据', async () => {
@@ -186,4 +188,33 @@ test('新版分片损坏时回退到迁移期保留的 V1 数据', async () => {
     loaded.shortcuts.map(({ id, title, url }) => ({ id, title, url })),
     legacy,
   );
+});
+
+test('快捷方式与分组通过同一元数据指针提交', async () => {
+  const { sync } = installChrome();
+  const groups = [
+    { id: 'default', title: '常用', collapsed: false },
+    { id: 'work', title: '工作', collapsed: true },
+  ];
+  await saveShortcutState({
+    shortcuts: [{ id: 'a', title: '工作台', url: 'https://work.test/', groupId: 'work' }],
+    groups,
+  });
+
+  assert.deepEqual(sync.data.nv_shortcuts_meta.groups, groups);
+  const loaded = await loadAll();
+  assert.deepEqual(loaded.groups, groups);
+  assert.equal(loaded.shortcuts[0].groupId, 'work');
+});
+
+test('一键清除只删除 Navigator 命名空间数据', async () => {
+  const { sync, local } = installChrome(
+    { nv_settings: { theme: 'cloud' }, unrelated: 'keep' },
+    { nv_custom_icons: { a: 'data:image/png;base64,abc' }, cache: 'keep' },
+  );
+
+  await clearAllData();
+
+  assert.deepEqual(sync.data, { unrelated: 'keep' });
+  assert.deepEqual(local.data, { cache: 'keep' });
 });

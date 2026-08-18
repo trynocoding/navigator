@@ -2,6 +2,7 @@
 // 快捷方式使用版本化分片，避免 sync 单项 8KB 限制。
 
 import { DEFAULT_SETTINGS } from './constants.js';
+import { DEFAULT_GROUP_ID, dedupeShortcuts, normalizeGroups } from './shortcut-model.js';
 
 const KEYS = {
   settings: 'nv_settings',
@@ -31,12 +32,13 @@ export async function loadAll() {
     loaded.records,
     localData[KEYS.customIcons] || {},
   );
+  const groups = normalizeGroups(loaded.groups);
 
   // V1 的单键数据在读取成功后自动迁移。迁移失败不影响本次使用，
   // 原键也会保留，下一次启动仍可重试。
   if (loaded.source === 'legacy') {
     try {
-      await saveShortcuts(shortcuts);
+      await saveShortcutState({ shortcuts, groups });
     } catch (error) {
       console.warn('[navigator] 快捷方式存储迁移失败，将继续使用旧数据。', error);
     }
@@ -45,6 +47,7 @@ export async function loadAll() {
   return {
     settings: { ...DEFAULT_SETTINGS, ...(data[KEYS.settings] || {}) },
     shortcuts,
+    groups,
     blocked: data[KEYS.blocked] || [],
   };
 }
@@ -54,14 +57,25 @@ export function saveSettings(settings) {
 }
 
 export async function saveShortcuts(shortcuts) {
-  const syncedShortcuts = shortcuts.map(({ id, title, url }) => ({ id, title, url }));
+  return saveShortcutState({ shortcuts, groups: [] });
+}
+
+export async function saveShortcutState({ shortcuts, groups }) {
+  const normalizedGroups = normalizeGroups(groups);
+  const knownGroups = new Set(normalizedGroups.map((group) => group.id));
+  const syncedShortcuts = shortcuts.map(({ id, title, url, groupId }) => ({
+    id,
+    title,
+    url,
+    groupId: knownGroups.has(groupId) ? groupId : DEFAULT_GROUP_ID,
+  }));
   const customIcons = Object.fromEntries(
     shortcuts
       .filter((shortcut) => isCustomIcon(shortcut.customIcon))
       .map((shortcut) => [shortcut.id, shortcut.customIcon]),
   );
 
-  await saveShortcutRecords(syncedShortcuts);
+  await saveShortcutRecords(syncedShortcuts, normalizedGroups);
   // 图片很容易超过 sync 单项限制，因此只在本机存储图标数据。
   await chrome.storage.local.set({ [KEYS.customIcons]: customIcons });
 }
@@ -72,8 +86,8 @@ export function saveBlocked(blocked) {
 
 // 导出/导入用
 export async function exportAll() {
-  const { settings, shortcuts, blocked } = await loadAll();
-  return { app: 'navigator', version: 2, exportedAt: new Date().toISOString(), settings, shortcuts, blocked };
+  const { settings, shortcuts, groups, blocked } = await loadAll();
+  return { app: 'navigator', version: 3, exportedAt: new Date().toISOString(), settings, shortcuts, groups, blocked };
 }
 
 export async function importAll(payload) {
@@ -81,14 +95,29 @@ export async function importAll(payload) {
     throw new Error('不是有效的 Navigator 导出文件');
   }
   const settings = { ...DEFAULT_SETTINGS, ...payload.settings };
-  const shortcuts = normalizeShortcuts(payload.shortcuts);
+  const normalizedShortcuts = normalizeShortcuts(payload.shortcuts);
+  const { shortcuts, duplicates } = dedupeShortcuts(normalizedShortcuts);
+  const groups = normalizeGroups(payload.groups);
   const blocked = Array.isArray(payload.blocked) ? payload.blocked : [];
   await Promise.all([
     saveSettings(settings),
-    saveShortcuts(shortcuts),
+    saveShortcutState({ shortcuts, groups }),
     saveBlocked(blocked),
   ]);
-  return { settings, shortcuts, blocked };
+  return { settings, shortcuts, groups, blocked, skippedDuplicates: duplicates.length };
+}
+
+export async function clearAllData() {
+  const [syncData, localData] = await Promise.all([
+    chrome.storage.sync.get(null),
+    chrome.storage.local.get(null),
+  ]);
+  const syncKeys = Object.keys(syncData).filter((key) => key.startsWith('nv_'));
+  const localKeys = Object.keys(localData).filter((key) => key.startsWith('nv_'));
+  await Promise.all([
+    syncKeys.length ? chrome.storage.sync.remove(syncKeys) : Promise.resolve(),
+    localKeys.length ? chrome.storage.local.remove(localKeys) : Promise.resolve(),
+  ]);
 }
 
 // ---- 内部 ----
@@ -97,7 +126,7 @@ async function loadShortcutRecords(initialData) {
   const meta = initialData[KEYS.shortcutsMeta];
   if (isShortcutMeta(meta)) {
     try {
-      return { records: await readShortcutGeneration(meta), source: 'v2' };
+      return { records: await readShortcutGeneration(meta), groups: meta.groups, source: 'v2' };
     } catch (initialError) {
       // 读取期间可能恰好有另一个页面完成了新一代提交并清理旧分片。
       // 重新读取一次元数据即可切到最新一代，避免把正常并发误判为损坏。
@@ -105,7 +134,7 @@ async function loadShortcutRecords(initialData) {
       const latestMeta = latestData[KEYS.shortcutsMeta];
       if (isShortcutMeta(latestMeta) && latestMeta.generation !== meta.generation) {
         try {
-          return { records: await readShortcutGeneration(latestMeta), source: 'v2' };
+          return { records: await readShortcutGeneration(latestMeta), groups: latestMeta.groups, source: 'v2' };
         } catch {
           // 继续走旧版回退或错误提示。
         }
@@ -113,15 +142,15 @@ async function loadShortcutRecords(initialData) {
       const legacy = initialData[KEYS.shortcutsLegacy];
       if (Array.isArray(legacy)) {
         console.warn('[navigator] 新版快捷方式数据不完整，已回退旧版数据。', initialError);
-        return { records: legacy, source: 'legacy' };
+        return { records: legacy, groups: [], source: 'legacy' };
       }
       throw new Error(`快捷方式同步数据损坏：${initialError.message}`);
     }
   }
 
   const legacy = initialData[KEYS.shortcutsLegacy];
-  if (Array.isArray(legacy)) return { records: legacy, source: 'legacy' };
-  return { records: [], source: 'empty' };
+  if (Array.isArray(legacy)) return { records: legacy, groups: [], source: 'legacy' };
+  return { records: [], groups: [], source: 'empty' };
 }
 
 async function readShortcutGeneration(meta) {
@@ -141,7 +170,7 @@ async function readShortcutGeneration(meta) {
   return records;
 }
 
-async function saveShortcutRecords(records) {
+async function saveShortcutRecords(records, groups = []) {
   const chunks = chunkShortcutRecords(records);
   const generation = createGeneration();
   const chunkKeys = shortcutChunkKeys(generation, chunks.length);
@@ -166,6 +195,7 @@ async function saveShortcutRecords(records) {
         chunkCount: chunks.length,
         count: records.length,
         checksum: shortcutChecksum(records),
+        groups: normalizeGroups(groups),
         updatedAt: Date.now(),
       },
     });
@@ -271,6 +301,7 @@ function normalizeShortcuts(list, storedIcons = {}) {
         id,
         title: String(s.title || '').trim() || hostOf(s.url) || s.url,
         url: s.url,
+        groupId: typeof s.groupId === 'string' ? s.groupId : DEFAULT_GROUP_ID,
         ...(customIcon ? { customIcon } : {}),
       };
     });

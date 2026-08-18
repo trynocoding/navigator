@@ -1,197 +1,332 @@
-// 入口：装配搜索、时钟、主题、快捷区、推荐区与设置
+// 入口：装配搜索、快捷方式集合、推荐与隐私控制。
+
+import '../shared/chrome-shim.js';
 
 import { ENGINES, DEFAULT_SETTINGS } from '../shared/constants.js';
-import { loadAll, saveSettings } from '../shared/storage.js';
+import {
+  clearAllData,
+  loadAll,
+  saveBlocked,
+  saveSettings,
+} from '../shared/storage.js';
 import { Shortcuts } from './modules/shortcuts.js';
 import { Recommend } from './modules/recommend.js';
 import { openSettingsDialog } from './modules/settings.js';
+import { Toast } from './modules/toast.js';
 
-const $ = (sel) => document.querySelector(sel);
-
-const state = {
-  settings: { ...DEFAULT_SETTINGS },
-  blocked: [],
-};
-
-const shortcuts = new Shortcuts($('#shortcuts-grid'), $('#shortcuts-empty'));
+const $ = (selector) => document.querySelector(selector);
+const state = { settings: { ...DEFAULT_SETTINGS }, blocked: [] };
+const toast = new Toast($('#toast-region'));
+const shortcuts = new Shortcuts(
+  $('#shortcuts-grid'),
+  $('#shortcuts-empty'),
+  $('#shortcut-groups'),
+);
 const recommend = new Recommend(
   $('#recommend-grid'),
   $('#recommend-hint'),
   $('#btn-recommend-toggle'),
 );
 
-// ---- 启动 ----
-
-init().catch((err) => console.error('[navigator] 初始化失败:', err));
+init().catch((error) => console.error('[navigator] 初始化失败:', error));
 
 async function init() {
-  const { settings, shortcuts: sc, blocked } = await loadAll();
-  state.settings = settings;
-  state.blocked = blocked;
+  const loaded = await loadAll();
+  state.settings = loaded.settings;
+  state.blocked = loaded.blocked;
+  shortcuts.setState(loaded.shortcuts, loaded.groups, loaded.settings.faviconSource);
+  shortcuts.onChange = async () => {
+    recommend.setPinnedOrigins(shortcuts.pinnedOrigins);
+    if (state.settings.recommendEnabled) await recommend.refresh();
+  };
+  shortcuts.onUndo = (message, undo) => toast.show(message, { action: undo });
+  shortcuts.onNotify = (message) => toast.show(message);
 
-  shortcuts.setState(sc, settings.faviconSource);
-  shortcuts.persist = wrapPersist(shortcuts);
   recommend.onPin = (site) => shortcuts.pin(site);
   recommend.onEnable = async () => {
     const result = await applyUserSettings({ ...state.settings, recommendEnabled: true });
     if (!result.ok) recommend.showHint(result.message);
   };
   recommend.onDisable = () => applySettings({ ...state.settings, recommendEnabled: false }, true);
+  recommend.onBlock = blockRecommendation;
   recommend.setPinnedOrigins(shortcuts.pinnedOrigins);
-  recommend.setState({
-    blocked,
-    faviconSource: settings.faviconSource,
-    enabled: settings.recommendEnabled,
-  });
 
-  applySettings(settings, false);
+  applySettings(loaded.settings, false);
   initSearch();
   initClock();
 
-  $('#btn-settings').addEventListener('click', () =>
-    openSettingsDialog(state.settings, {
-      onApply: (next) => applyUserSettings(next),
-    }),
-  );
+  $('#btn-settings').addEventListener('click', openSettings);
   $('#btn-add-shortcut').addEventListener('click', () => shortcuts.add());
+  $('#btn-add-group').addEventListener('click', () => shortcuts.addGroup());
 }
 
-// ---- 设置应用（主题 / 引擎 / 各区域刷新） ----
+async function openSettings() {
+  const permissionGranted = await chrome.permissions.contains({ permissions: ['history'] });
+  openSettingsDialog({
+    settings: state.settings,
+    blocked: state.blocked,
+    permissionGranted,
+  }, {
+    onApply: applyUserSettings,
+    onRevokeHistory: revokeHistory,
+    onRestoreBlocked: restoreBlocked,
+    onImported: applyImportedState,
+    onClearData: clearNavigatorData,
+  });
+}
 
 async function applySettings(next, persist) {
-  const prev = state.settings;
+  const previous = state.settings;
   state.settings = next;
   applyTheme(next);
   renderEngineSelect();
-
-  const faviconChanged = prev.faviconSource !== next.faviconSource;
-  shortcuts.setState(currentShortcuts(), next.faviconSource);
-  recommend.blocked = state.blocked;
+  shortcuts.setState(shortcuts.shortcuts, shortcuts.groups, next.faviconSource);
   recommend.setPinnedOrigins(shortcuts.pinnedOrigins);
-
-  if (prev.recommendEnabled !== next.recommendEnabled || faviconChanged || persist) {
-    recommend.setState({
-      blocked: state.blocked,
-      faviconSource: next.faviconSource,
-      enabled: next.recommendEnabled,
-    });
-  }
-
+  recommend.setState({
+    blocked: state.blocked,
+    faviconSource: next.faviconSource,
+    enabled: next.recommendEnabled,
+  });
   if (persist) await saveSettings(next);
+  if (previous.faviconSource !== next.faviconSource) shortcuts.render();
 }
 
 async function applyUserSettings(next) {
   if (next.recommendEnabled && !state.settings.recommendEnabled) {
     const granted = await chrome.permissions.request({ permissions: ['history'] });
     if (!granted) {
-      return {
-        ok: false,
-        message: '需要浏览记录权限才能开启自动推荐。你可以稍后再次尝试。',
-      };
+      return { ok: false, message: '需要浏览记录权限才能开启推荐。你可以稍后再次尝试。' };
     }
   }
-
   await applySettings(next, true);
   return { ok: true };
 }
 
-// shortcuts 内部数组是数据源；这里包一层读取
-function currentShortcuts() {
-  return shortcuts.shortcuts;
+async function revokeHistory() {
+  await chrome.permissions.remove({ permissions: ['history'] });
+  await applySettings({ ...state.settings, recommendEnabled: false }, true);
+  toast.show('已停止推荐并撤销浏览记录权限');
 }
 
-function wrapPersist(instance) {
-  const original = instance.persist.bind(instance);
-  return async (...args) => {
-    await original(...args);
-    recommend.setPinnedOrigins(instance.pinnedOrigins);
-    if (state.settings.recommendEnabled) await recommend.refresh();
-  };
+async function blockRecommendation(site) {
+  if (state.blocked.includes(site.origin)) return;
+  state.blocked = [...state.blocked, site.origin];
+  await saveBlocked(state.blocked);
+  recommend.blocked = state.blocked;
+  await recommend.refresh();
+  toast.show(`不再推荐 ${site.host}`, {
+    action: async () => {
+      state.blocked = state.blocked.filter((origin) => origin !== site.origin);
+      await saveBlocked(state.blocked);
+      recommend.blocked = state.blocked;
+      await recommend.refresh();
+    },
+  });
 }
 
-// ---- 主题 ----
+async function restoreBlocked(origin) {
+  state.blocked = origin
+    ? state.blocked.filter((entry) => entry !== origin)
+    : [];
+  await saveBlocked(state.blocked);
+  recommend.blocked = state.blocked;
+  if (state.settings.recommendEnabled) await recommend.refresh();
+}
+
+async function applyImportedState(imported) {
+  state.blocked = imported.blocked;
+  shortcuts.setState(imported.shortcuts, imported.groups, imported.settings.faviconSource);
+  await applySettings(imported.settings, false);
+  toast.show(imported.skippedDuplicates
+    ? `备份已导入，跳过 ${imported.skippedDuplicates} 个重复网址`
+    : '备份已导入');
+}
+
+async function clearNavigatorData() {
+  await clearAllData();
+  await chrome.permissions.remove({ permissions: ['history'] });
+  state.blocked = [];
+  shortcuts.setState([], [], DEFAULT_SETTINGS.faviconSource);
+  await applySettings({ ...DEFAULT_SETTINGS }, false);
+  toast.show('Navigator 数据已清空');
+}
 
 function applyTheme(settings) {
-  const resolved =
-    settings.theme === 'auto'
-      ? matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'graphite'
-        : 'cloud'
-      : settings.theme;
+  const resolved = settings.theme === 'auto'
+    ? matchMedia('(prefers-color-scheme: dark)').matches ? 'graphite' : 'cloud'
+    : settings.theme;
   document.documentElement.dataset.theme = resolved;
-  if (settings.accent) {
-    document.documentElement.style.setProperty('--accent', settings.accent);
-  } else {
-    document.documentElement.style.removeProperty('--accent');
-  }
+  if (settings.accent) document.documentElement.style.setProperty('--accent', settings.accent);
+  else document.documentElement.style.removeProperty('--accent');
 }
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (state.settings.theme === 'auto') applyTheme(state.settings);
 });
 
-// ---- 搜索 ----
-
 function renderEngineSelect() {
-  const sel = $('#engine-select');
+  const select = $('#engine-select');
   const current = state.settings.engine;
-  sel.textContent = '';
-  for (const [id, e] of Object.entries(ENGINES)) {
-    const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = e.label;
-    sel.append(opt);
+  select.textContent = '';
+  for (const [id, engine] of Object.entries(ENGINES)) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = engine.label;
+    select.append(option);
   }
-  sel.value = current in ENGINES ? current : 'google';
-  sel.onchange = async () => {
-    state.settings.engine = sel.value;
+  select.value = current in ENGINES ? current : 'google';
+  select.onchange = async () => {
+    state.settings.engine = select.value;
     await saveSettings(state.settings);
   };
 }
 
 function initSearch() {
   const input = $('#search-input');
-  input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-    const q = input.value.trim();
-    if (!q) return;
-    window.location.href = buildTarget(q);
+  const resultsElement = $('#search-results');
+  let matches = [];
+  let activeIndex = -1;
+
+  const closeResults = () => {
+    matches = [];
+    activeIndex = -1;
+    resultsElement.hidden = true;
+    resultsElement.textContent = '';
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  };
+
+  const renderResults = () => {
+    const query = input.value.trim();
+    matches = shortcuts.search(query, 6);
+    resultsElement.textContent = '';
+    if (!matches.length) {
+      closeResults();
+      return;
+    }
+    activeIndex = Math.min(Math.max(activeIndex, 0), matches.length - 1);
+    matches.forEach((shortcut, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = `search-result-${index}`;
+      button.className = 'search-result';
+      button.classList.toggle('active', index === activeIndex);
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', String(index === activeIndex));
+      const host = safeHost(shortcut.url);
+      button.innerHTML = `<span class="result-mark">${escapeHtml(shortcut.title.slice(0, 1).toUpperCase())}</span><span class="result-copy"><strong>${escapeHtml(shortcut.title)}</strong><small>${escapeHtml(host)} · ${escapeHtml(shortcut.groupTitle)}</small></span><kbd>↵</kbd>`;
+      button.addEventListener('mouseenter', () => {
+        activeIndex = index;
+        updateActive();
+      });
+      button.addEventListener('mousedown', (event) => event.preventDefault());
+      button.addEventListener('click', (event) => openShortcut(shortcut, event));
+      resultsElement.append(button);
+    });
+    resultsElement.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    updateActive();
+  };
+
+  const updateActive = () => {
+    resultsElement.querySelectorAll('.search-result').forEach((element, index) => {
+      element.classList.toggle('active', index === activeIndex);
+      element.setAttribute('aria-selected', String(index === activeIndex));
+    });
+    if (activeIndex >= 0) input.setAttribute('aria-activedescendant', `search-result-${activeIndex}`);
+  };
+
+  const openShortcut = (shortcut, event) => {
+    closeResults();
+    openTarget(shortcut.url, event.ctrlKey || event.metaKey || event.shiftKey);
+  };
+
+  input.addEventListener('input', renderResults);
+  input.addEventListener('focus', () => { if (input.value.trim()) renderResults(); });
+  input.addEventListener('blur', () => setTimeout(closeResults, 120));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' && matches.length) {
+      event.preventDefault();
+      activeIndex = (activeIndex + 1) % matches.length;
+      updateActive();
+      return;
+    }
+    if (event.key === 'ArrowUp' && matches.length) {
+      event.preventDefault();
+      activeIndex = (activeIndex - 1 + matches.length) % matches.length;
+      updateActive();
+      return;
+    }
+    if (event.key === 'Escape') {
+      closeResults();
+      input.select();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    const query = input.value.trim();
+    if (!query) return;
+    event.preventDefault();
+    if (matches[activeIndex]) openShortcut(matches[activeIndex], event);
+    else openTarget(buildTarget(query), event.ctrlKey || event.metaKey || event.shiftKey);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    const target = event.target;
+    const isEditable = target instanceof HTMLInputElement
+      || target instanceof HTMLTextAreaElement
+      || target instanceof HTMLSelectElement
+      || target?.isContentEditable;
+    if ((event.key === '/' && !isEditable) || ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k')) {
+      event.preventDefault();
+      input.focus();
+      input.select();
+    }
   });
 }
 
-function buildTarget(q) {
-  const looksLikeUrl =
-    /^(https?:\/\/)/i.test(q) || (/^[\w-]+(\.[\w-]+)+/.test(q) && !q.includes(' '));
-  if (looksLikeUrl) {
-    const url = /^https?:\/\//i.test(q) ? q : `https://${q}`;
-    try {
-      return new URL(url).href;
-    } catch {
-      /* 走搜索 */
-    }
-  }
-  const engine = ENGINES[state.settings.engine] || ENGINES.google;
-  const template =
-    state.settings.engine === 'custom' ? state.settings.customEngine : engine.url;
-  return template.includes('%s')
-    ? template.replace('%s', encodeURIComponent(q))
-    : `${template}${encodeURIComponent(q)}`;
+function openTarget(url, newTab) {
+  if (newTab) window.open(url, '_blank', 'noopener');
+  else window.location.href = url;
 }
 
-// ---- 时钟 ----
+function buildTarget(query) {
+  const looksLikeUrl = /^(https?:\/\/)/i.test(query)
+    || (/^[\w-]+(\.[\w-]+)+/.test(query) && !query.includes(' '));
+  if (looksLikeUrl) {
+    try { return new URL(/^https?:\/\//i.test(query) ? query : `https://${query}`).href; } catch { /* 搜索 */ }
+  }
+  const engine = ENGINES[state.settings.engine] || ENGINES.google;
+  const template = state.settings.engine === 'custom' ? state.settings.customEngine : engine.url;
+  return template.includes('%s')
+    ? template.replace('%s', encodeURIComponent(query))
+    : `${template}${encodeURIComponent(query)}`;
+}
 
 function initClock() {
-  const timeEl = $('#clock-time');
-  const dateEl = $('#clock-date');
-  const greetingEl = $('#greeting');
-  const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+  const timeElement = $('#clock-time');
+  const dateElement = $('#clock-date');
+  const greetingElement = $('#greeting');
+  const week = ['日', '一', '二', '三', '四', '五', '六'];
   const update = () => {
-    const d = new Date();
-    const hour = d.getHours();
-    timeEl.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    dateEl.textContent = `${d.getMonth() + 1}月${d.getDate()}日 · 星期${WEEK[d.getDay()]}`;
-    greetingEl.textContent = hour < 6 ? '夜深了，慢一点也没关系' : hour < 11 ? '早上好，开启清晰的一天' : hour < 14 ? '中午好，继续保持节奏' : hour < 18 ? '下午好，专注下一件事' : '晚上好，收好今天的灵感';
+    const date = new Date();
+    const hour = date.getHours();
+    timeElement.textContent = `${String(hour).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    dateElement.textContent = `${date.getMonth() + 1}月${date.getDate()}日 · 星期${week[date.getDay()]}`;
+    greetingElement.textContent = hour < 6 ? '夜深了，慢一点也没关系' : hour < 11 ? '早上好，开启清晰的一天' : hour < 14 ? '中午好，继续保持节奏' : hour < 18 ? '下午好，专注下一件事' : '晚上好，收好今天的灵感';
   };
   update();
   setInterval(update, 1000);
+}
+
+function safeHost(url) {
+  try { return new URL(url).hostname; } catch { return url; }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }

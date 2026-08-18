@@ -7,7 +7,6 @@ import {
   selectHistoryCandidates,
 } from '../../shared/scorer.js';
 import { makeIconEl } from '../../shared/favicon.js';
-import { saveBlocked } from '../../shared/storage.js';
 
 const WINDOW_DAYS = 30;
 const TOP_N = 12;
@@ -24,6 +23,7 @@ export class Recommend {
     this.onPin = null; // 由 main 注入：固定到快捷区
     this.onEnable = null; // 由 main 注入：申请权限并保存设置
     this.onDisable = null; // 由 main 注入：设置里关闭
+    this.onBlock = null; // 由 main 注入：保存屏蔽并提供撤销
   }
 
   setState({ blocked, faviconSource, enabled }) {
@@ -119,9 +119,7 @@ export class Recommend {
       blockBtn.onclick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!this.blocked.includes(site.origin)) this.blocked.push(site.origin);
-        await saveBlocked(this.blocked);
-        await this.refresh();
+        await this.onBlock?.(site);
       };
 
       actions.append(pinBtn, blockBtn);

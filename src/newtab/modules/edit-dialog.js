@@ -13,7 +13,8 @@ const SUPPORTED_ICON_TYPES = new Set([
   'image/vnd.microsoft.icon',
 ]);
 
-export function openEditDialog(existing) {
+export function openEditDialog(existing, options = {}) {
+  const groups = Array.isArray(options.groups) ? options.groups : [];
   const dlg = document.createElement('dialog');
   dlg.className = 'edit-dialog';
   dlg.setAttribute('aria-labelledby', 'shortcut-dialog-title');
@@ -29,6 +30,12 @@ export function openEditDialog(existing) {
         <input id="shortcut-url" name="url" type="text" placeholder="例如 github.com" required aria-describedby="shortcut-url-hint" />
         <p class="form-hint" id="shortcut-url-hint">可省略 https://，保存时自动补全</p>
       </div>
+      ${groups.length ? `<div class="form-row">
+        <label for="shortcut-group">分组</label>
+        <select id="shortcut-group" name="groupId">
+          ${groups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.title)}</option>`).join('')}
+        </select>
+      </div>` : ''}
       <div class="form-row">
         <span class="field-label" id="shortcut-icon-label">自定义图标（可选）</span>
         <div class="shortcut-icon-editor" aria-labelledby="shortcut-icon-label">
@@ -59,6 +66,7 @@ export function openEditDialog(existing) {
   const titleInput = form.elements.namedItem('title');
   const urlInput = form.elements.namedItem('url');
   const fileInput = form.elements.namedItem('iconFile');
+  const groupInput = form.elements.namedItem('groupId');
   const saveButton = dlg.querySelector('[data-action="save"]');
   const chooseIconButton = dlg.querySelector('[data-action="choose-icon"]');
   const removeIconButton = dlg.querySelector('[data-action="remove-icon"]');
@@ -69,6 +77,7 @@ export function openEditDialog(existing) {
   let processingIcon = false;
   titleInput.value = existing?.title || '';
   urlInput.value = existing?.url || '';
+  if (groupInput) groupInput.value = existing?.groupId || options.groupId || groups[0]?.id;
   renderIconPreview();
   document.body.append(dlg);
   dlg.showModal();
@@ -80,7 +89,7 @@ export function openEditDialog(existing) {
       resolve(value);
     };
 
-    const save = () => {
+    const save = async () => {
       if (processingIcon) return;
       const url = normalizeUrl(urlInput.value.trim());
       if (!url) {
@@ -93,8 +102,15 @@ export function openEditDialog(existing) {
         id: existing?.id,
         title: titleInput.value.trim() || hostOf(url) || url,
         url,
+        ...(groupInput ? { groupId: groupInput.value } : {}),
       };
       if (customIcon) result.customIcon = customIcon;
+      const validationMessage = await options.validate?.(result);
+      if (validationMessage) {
+        urlInput.setCustomValidity(validationMessage);
+        urlInput.reportValidity();
+        return;
+      }
       finish(result);
     };
 
@@ -159,6 +175,49 @@ export function openEditDialog(existing) {
   }
 }
 
+export function openGroupDialog(existingTitle = '') {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'edit-dialog compact-dialog';
+  dlg.setAttribute('aria-labelledby', 'group-dialog-title');
+  dlg.innerHTML = `
+    <h3 id="group-dialog-title">${existingTitle ? '重命名分组' : '新建分组'}</h3>
+    <form method="dialog">
+      <div class="form-row">
+        <label for="group-title">名称</label>
+        <input id="group-title" name="title" type="text" maxlength="20" required placeholder="例如：工作、阅读、设计" value="${escapeHtml(existingTitle)}" />
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn-ghost" data-action="cancel">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  dlg.showModal();
+  const input = dlg.querySelector('input');
+  input.select();
+
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      dlg.close();
+      dlg.remove();
+      resolve(value);
+    };
+    dlg.querySelector('form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const title = input.value.trim();
+      if (title) finish(title);
+    });
+    dlg.querySelector('[data-action="cancel"]').onclick = () => finish(null);
+    dlg.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      finish(null);
+    });
+    dlg.addEventListener('click', (event) => {
+      if (event.target === dlg) finish(null);
+    });
+  });
+}
+
 export function normalizeUrl(input) {
   if (!input) return '';
   const withProto = /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `https://${input}`;
@@ -195,6 +254,15 @@ async function resizeIcon(file) {
   const png = canvas.toDataURL('image/png');
   const webp = canvas.toDataURL('image/webp', 0.9);
   return webp.startsWith('data:image/webp') && webp.length < png.length ? webp : png;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
 function loadImage(file) {

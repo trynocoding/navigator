@@ -1,14 +1,14 @@
 # Navigator 导航页
 
-一个 Chrome（Manifest V3）新标签页扩展：自定义快捷方式 + 按访问频次自动推荐 + 多主题。数据仅存本地并通过 Chrome 账号同步，不上传任何服务器。
+一个 Chrome（Manifest V3）新标签页扩展：自定义快捷方式 + 按访问频次自动推荐 + 多主题。Navigator 不使用自有服务器；同步数据交给 Chrome，自定义图标和浏览分析留在本机。
 
 ## 功能
 
-- **自定义快捷方式**：增删改、右键菜单（打开 / 新窗口 / 编辑 / 置顶 / 删除）、拖拽排序，可上传自定义图标，favicon 自动获取（失败降级为首字母徽标）
-- **常用推荐**：基于近 30 天浏览记录，按「频次 × 时间衰减」（7 天半衰期）评分，自动推荐常去网站；可 📌 固定到快捷区、🚫 屏蔽域名；权限按需申请，默认不开启
-- **搜索框**：输入即搜（回车跳转），支持 Google / Bing / 百度 / 自定义，自动识别网址直达
+- **自定义快捷方式**：单层分组、折叠、跨组拖拽、右键管理和自定义图标；删除支持撤销，添加与导入会拦截规范化后的重复网址
+- **常用推荐**：基于近 30 天浏览记录，按「频次 × 时间衰减」（7 天半衰期）评分；可固定、屏蔽并撤销，权限按需申请且可随时撤销
+- **搜索与命令入口**：优先匹配已保存快捷方式，支持 `/`、`Ctrl/Cmd + K`、方向键、回车和修饰键新标签打开；也支持 Google / Bing / 百度 / 自定义搜索引擎
 - **主题**：6 套预设（云白 / 暖沙 / 石墨 / 深空蓝 / 莫兰迪绿 / 暗紫）+ 跟随系统亮暗 + 自定义主题色
-- **数据**：快捷方式使用版本化分片通过 `chrome.storage.sync` 跨设备同步，可从旧版单键数据自动迁移；自定义图标因同步空间限制保存在本机，并可随 JSON 一键导入 / 导出
+- **数据与隐私**：快捷方式和分组使用版本化分片同步，可从旧版数据自动迁移；设置页明确区分本机计算、Chrome 同步和外部图标请求，并提供备份、屏蔽恢复、撤销权限与一键清空
 
 ## 安装（开发者模式）
 
@@ -24,7 +24,7 @@ npm run build
 ## 开发
 
 ```bash
-npm run dev    # 本地起 Vite 开发服务器（chrome.* API 不可用，仅供调样式）
+npm run dev    # 本地起 Vite 开发服务器（自动启用开发 API 模拟层，可完整交互）
 npm test       # 运行存储迁移与推荐排序测试
 npm run build  # 产出可加载的 dist/
 node scripts/gen-icons.mjs   # 重新生成扩展图标
@@ -38,10 +38,12 @@ node scripts/gen-icons.mjs   # 重新生成扩展图标
 ├── src/
 │   ├── newtab/
 │   │   ├── main.js         # 装配入口
-│   │   ├── modules/        # shortcuts / recommend / settings / edit-dialog
+│   │   ├── modules/        # shortcuts / recommend / settings / edit-dialog / toast
 │   │   └── styles/         # base.css（布局）、themes.css（主题变量）
 │   └── shared/
 │       ├── storage.js      # chrome.storage.sync 分片、迁移与导入导出
+│       ├── shortcut-model.js # 分组、排序、去重与搜索模型
+│       ├── chrome-shim.js  # 仅在本地预览启用的扩展 API 模拟层
 │       ├── scorer.js       # 频次评分算法（纯函数）
 │       ├── favicon.js      # 图标获取与降级链
 │       └── constants.js    # 引擎表、主题表、默认配置
