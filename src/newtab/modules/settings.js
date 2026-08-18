@@ -1,10 +1,23 @@
 // 设置与隐私控制中心：外观、搜索、推荐权限、屏蔽列表和数据生命周期。
 
-import { ENGINES, THEMES, FAVICON_SOURCES, DEFAULT_SETTINGS } from '../../shared/constants.js';
+import {
+  DEFAULT_SETTINGS,
+  ENGINES,
+  FAVICON_SOURCES,
+  RECOMMEND_MODES,
+  RECOMMEND_WINDOWS,
+  THEMES,
+} from '../../shared/constants.js';
 import { exportAll, importAll } from '../../shared/storage.js';
 
 export function openSettingsDialog(context, handlers) {
-  const { settings, blocked = [], permissionGranted = false } = context;
+  const {
+    settings,
+    blocked = [],
+    permissionGranted = false,
+    bookmarksGranted = false,
+    hasImportSnapshot = false,
+  } = context;
   const externalFavicon = settings.faviconSource !== 'chrome';
   const dlg = document.createElement('dialog');
   dlg.className = 'settings-dialog';
@@ -36,14 +49,28 @@ export function openSettingsDialog(context, handlers) {
 
         <section class="settings-section" aria-labelledby="privacy-title">
           <div class="settings-title-row"><h4 id="privacy-title">推荐与隐私</h4><span class="status-pill ${permissionGranted ? 'is-on' : ''}">${permissionGranted ? '已授权' : '未授权'}</span></div>
-          <label class="switch-row" for="settings-recommend"><input id="settings-recommend" name="recommendEnabled" type="checkbox" /><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>自动发现常去网站</strong><span>仅分析最近 30 天的浏览记录；关闭后停止读取</span></span></label>
+          <label class="switch-row" for="settings-recommend"><input id="settings-recommend" name="recommendEnabled" type="checkbox" /><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>自动发现常去网站</strong><span>只分析所选时间范围内的浏览记录；关闭后停止读取</span></span></label>
           <div class="permission-card">
             <div><strong>浏览记录权限</strong><p>${permissionGranted ? 'Chrome 已允许 Navigator 在本机计算访问频次。' : '当前无法读取浏览记录；开启推荐时才会申请。'}</p></div>
             ${permissionGranted ? '<button type="button" class="btn-ghost" data-action="revoke-history">撤销权限</button>' : ''}
           </div>
+          <div class="recommend-controls">
+            <div class="form-row"><label for="settings-recommend-window">分析范围</label><select id="settings-recommend-window" name="recommendWindowDays">${RECOMMEND_WINDOWS.map((window) => `<option value="${window.value}">${window.label}</option>`).join('')}</select></div>
+            <fieldset><legend>排序偏好</legend><div class="recommend-mode-grid">${RECOMMEND_MODES.map((mode) => `<label><input type="radio" name="recommendMode" value="${mode.id}" /><span><strong>${mode.label}</strong><small>${mode.description}</small></span></label>`).join('')}</div></fieldset>
+          </div>
           <div class="blocked-panel">
             <div class="blocked-head"><div><strong>不再推荐</strong><span>${blocked.length ? `${blocked.length} 个网站` : '暂无屏蔽网站'}</span></div>${blocked.length ? '<button type="button" class="text-button" data-action="restore-all">全部恢复</button>' : ''}</div>
             <div class="blocked-list">${blocked.map((origin) => `<div class="blocked-item"><span title="${escapeHtml(origin)}">${escapeHtml(displayOrigin(origin))}</span><button type="button" data-restore="${escapeHtml(origin)}">恢复</button></div>`).join('')}</div>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="bookmarks-title">
+          <div class="settings-title-row"><h4 id="bookmarks-title">Chrome 书签</h4><span class="status-pill ${bookmarksGranted ? 'is-on' : ''}">${bookmarksGranted ? '已授权' : '按需授权'}</span></div>
+          <p class="section-description settings-section-copy">选择文件夹导入，Navigator 会先预览并跳过重复网址，不会修改 Chrome 原书签。</p>
+          <div class="bookmark-actions">
+            <button type="button" class="btn-primary" data-action="import-bookmarks">从 Chrome 导入</button>
+            ${hasImportSnapshot ? '<button type="button" class="btn-ghost" data-action="restore-import">撤销上次书签导入</button>' : ''}
+            ${bookmarksGranted ? '<button type="button" class="text-button" data-action="revoke-bookmarks">撤销书签权限</button>' : ''}
           </div>
         </section>
 
@@ -80,6 +107,14 @@ export function openSettingsDialog(context, handlers) {
   field('customEngine').value = settings.customEngine;
   field('faviconSource').value = settings.faviconSource;
   field('recommendEnabled').checked = settings.recommendEnabled;
+  const recommendWindowDays = RECOMMEND_WINDOWS.some((entry) => entry.value === Number(settings.recommendWindowDays))
+    ? Number(settings.recommendWindowDays)
+    : DEFAULT_SETTINGS.recommendWindowDays;
+  field('recommendWindowDays').value = String(recommendWindowDays);
+  const recommendMode = [...dlg.querySelectorAll('[name="recommendMode"]')]
+    .find((input) => input.value === settings.recommendMode)
+    || dlg.querySelector(`[name="recommendMode"][value="${DEFAULT_SETTINGS.recommendMode}"]`);
+  recommendMode.checked = true;
 
   const showMessage = (text, success = false) => {
     message.textContent = text;
@@ -106,6 +141,8 @@ export function openSettingsDialog(context, handlers) {
       customEngine: field('customEngine').value.trim() || DEFAULT_SETTINGS.customEngine,
       faviconSource: field('faviconSource').value,
       recommendEnabled: field('recommendEnabled').checked,
+      recommendWindowDays: Number(field('recommendWindowDays').value),
+      recommendMode: dlg.querySelector('[name="recommendMode"]:checked')?.value || DEFAULT_SETTINGS.recommendMode,
     };
     const result = await handlers.onApply(next);
     if (result?.ok === false) {
@@ -120,6 +157,29 @@ export function openSettingsDialog(context, handlers) {
     event.currentTarget.disabled = true;
     await handlers.onRevokeHistory();
     done();
+  });
+  dlg.querySelector('[data-action="import-bookmarks"]').onclick = async (event) => {
+    event.currentTarget.disabled = true;
+    const result = await handlers.onImportBookmarks();
+    if (result?.ok === false) {
+      event.currentTarget.disabled = false;
+      showMessage(result.message);
+      return;
+    }
+    if (result?.ok) done();
+    else event.currentTarget.disabled = false;
+  };
+  dlg.querySelector('[data-action="restore-import"]')?.addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    const restored = await handlers.onRestoreImport();
+    if (restored) done();
+    else showMessage('没有可恢复的导入快照');
+  });
+  dlg.querySelector('[data-action="revoke-bookmarks"]')?.addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    await handlers.onRevokeBookmarks();
+    event.currentTarget.remove();
+    showMessage('已撤销 Chrome 书签权限', true);
   });
   dlg.querySelectorAll('[data-restore]').forEach((button) => {
     button.onclick = async () => {

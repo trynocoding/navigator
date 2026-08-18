@@ -29,7 +29,6 @@
       </header>
 
       <section class="hero" aria-labelledby="hero-title">
-        <p class="eyebrow" id="greeting">专注你的下一站</p>
         <h1 id="hero-title">今天，想从哪里开始？</h1>
         <div class="search-wrap">
           <div class="search-shell">
@@ -54,7 +53,6 @@
             <select id="engine-select" title="切换搜索引擎" aria-label="搜索引擎"></select>
           </div>
           <div id="search-results" class="search-results" role="listbox" hidden></div>
-          <p class="search-shortcut-hint"><kbd>/</kbd> 或 <kbd>Ctrl K</kbd> 快速聚焦</p>
           </div>
         </div>
       </section>
@@ -64,7 +62,6 @@
           <div class="section-head">
             <div>
               <h2>我的快捷方式</h2>
-              <p class="section-description">拖拽即可排序，随手整理你的常用入口</p>
             </div>
             <div class="section-actions">
             <button id="btn-add-group" class="section-action section-action-secondary">
@@ -88,7 +85,7 @@
           <div class="section-head">
             <div>
               <h2>智能推荐</h2>
-              <p class="section-description">近 30 天内常去但尚未固定的网站 · 仅在本机分析</p>
+              <p class="section-description" id="recommend-description">近 30 天 · 本机分析</p>
             </div>
             <button id="btn-recommend-toggle" class="section-action section-action-secondary"></button>
           </div>
@@ -97,10 +94,6 @@
         </section>
       </main>
 
-      <footer class="foot">
-        <span class="privacy-dot" aria-hidden="true"></span>
-        快捷方式和设置会同步，自定义图标仅保存在本机
-      </footer>
     </div>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 

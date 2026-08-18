@@ -31,7 +31,7 @@ export function openEditDialog(existing, options = {}) {
         <p class="form-hint" id="shortcut-url-hint">可省略 https://，保存时自动补全</p>
       </div>
       ${groups.length ? `<div class="form-row">
-        <label for="shortcut-group">分组</label>
+        <label for="shortcut-group">所属分组</label>
         <select id="shortcut-group" name="groupId">
           ${groups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.title)}</option>`).join('')}
         </select>

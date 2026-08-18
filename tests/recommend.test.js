@@ -46,3 +46,21 @@ test('完整推荐流程不会因大量近期低频 URL 漏掉高频网站', asy
   assert.equal(ranked[0].origin, 'https://frequent.test');
   assert.equal(ranked[0].visits, 12);
 });
+
+test('灵敏模式可纳入近期低频站点，稳定模式会过滤', async () => {
+  const now = Date.now();
+  globalThis.chrome = {
+    history: {
+      async search() {
+        return [{ url: 'https://new-habit.test/', title: 'New Habit', visitCount: 2, lastVisitTime: now }];
+      },
+      async getVisits() {
+        return [{ visitTime: now }, { visitTime: now - 1000 }];
+      },
+    },
+  };
+
+  const base = { limit: 3, windowDays: 7, blocked: [], pinnedOrigins: [] };
+  assert.equal((await fetchRankedSites({ ...base, mode: 'stable' })).length, 0);
+  assert.equal((await fetchRankedSites({ ...base, mode: 'sensitive' })).length, 1);
+});

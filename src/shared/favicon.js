@@ -14,7 +14,7 @@ export function faviconUrl(pageUrl, source = 'chrome', size = 64) {
       return `https://icons.duckduckgo.com/ip3/${u.hostname}.ico`;
     case 'chrome':
     default:
-      return `chrome://favicon2/?size=${size}&scale_factor=1x&page_url=${encodeURIComponent(u.origin)}`;
+      return `${chrome.runtime.getURL('/_favicon/')}?pageUrl=${encodeURIComponent(u.href)}&size=${size}`;
   }
 }
 

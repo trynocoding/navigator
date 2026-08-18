@@ -68,3 +68,16 @@ test('导入去重保留首个规范化网址', () => {
   assert.deepEqual(result.shortcuts.map((item) => item.id), ['a', 'c']);
   assert.deepEqual(result.duplicates.map((item) => item.id), ['b']);
 });
+
+test('批量采集统一统计新增、重复和无效网址', () => {
+  const collection = new ShortcutCollection(sample, groups);
+  const result = collection.addMany([
+    { title: '新站点', url: 'https://new.test/' },
+    { title: '重复 GitHub', url: 'https://github.com/#home' },
+    { title: '浏览器内部页', url: 'chrome://settings/' },
+  ], 'work');
+  assert.equal(result.added.length, 1);
+  assert.equal(result.added[0].groupId, 'work');
+  assert.equal(result.duplicates.length, 1);
+  assert.equal(result.invalid.length, 1);
+});

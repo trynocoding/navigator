@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import {
   SHORTCUT_CHUNK_MAX_BYTES,
   clearAllData,
+  getImportSnapshot,
   loadAll,
+  restoreImportSnapshot,
+  saveImportSnapshot,
   saveShortcutState,
   saveShortcuts,
 } from '../src/shared/storage.js';
@@ -190,6 +193,84 @@ test('新版分片损坏时回退到迁移期保留的 V1 数据', async () => {
   );
 });
 
+test('V2 校验失败且没有 V1 备份时仍可启动并保全可读数据', async () => {
+  const shortcuts = [
+    { id: 'a', title: '站点 A', url: 'https://a.test/' },
+    { id: 'b', title: '站点 B', url: 'https://b.test/' },
+  ];
+  const groups = [{ id: 'work', title: '工作', collapsed: false }];
+  const { sync, local } = installChrome();
+  await saveShortcutState({ shortcuts, groups });
+
+  const meta = sync.data.nv_shortcuts_meta;
+  const firstChunkKey = `nv_shortcuts_v2_${meta.generation}_0`;
+  delete local.data.nv_shortcuts_backup;
+  sync.data[firstChunkKey][0].title = '仍然可读但校验值已变化';
+
+  const originalWarn = console.warn;
+  let loaded;
+  try {
+    console.warn = () => {};
+    loaded = await loadAll();
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(loaded.shortcuts.length, 2);
+  assert.equal(loaded.shortcuts[0].title, '仍然可读但校验值已变化');
+  assert.deepEqual(loaded.groups.find((group) => group.id === 'work'), groups[0]);
+  assert.match(loaded.storageWarning, /同步数据异常/);
+  assert.equal(local.data.nv_shortcuts_corrupt_backup.meta.generation, meta.generation);
+  assert.deepEqual(local.data.nv_shortcuts_corrupt_backup.syncData[firstChunkKey], sync.data[firstChunkKey]);
+});
+
+test('同一代分片在第二次读取时到达会正常完成加载', async () => {
+  const shortcuts = [{ id: 'late', title: '稍后到达', url: 'https://late.test/' }];
+  const { sync } = installChrome();
+  await saveShortcuts(shortcuts);
+  const meta = sync.data.nv_shortcuts_meta;
+  const chunkKey = `nv_shortcuts_v2_${meta.generation}_0`;
+  const delayedChunk = structuredClone(sync.data[chunkKey]);
+  delete sync.data[chunkKey];
+
+  const baseGet = sync.get.bind(sync);
+  let delayed = true;
+  sync.get = async function getWithDelayedChunk(keys) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    if (delayed && list.includes(chunkKey)) {
+      delayed = false;
+      const result = await baseGet(keys);
+      this.data[chunkKey] = structuredClone(delayedChunk);
+      return result;
+    }
+    return baseGet(keys);
+  };
+
+  const loaded = await loadAll();
+  assert.equal(loaded.shortcuts[0].url, shortcuts[0].url);
+  assert.equal(loaded.storageWarning, '');
+});
+
+test('同步分片完全缺失时使用本机最近一次完整备份', async () => {
+  const shortcuts = [{ id: 'safe', title: '本机备份', url: 'https://safe.test/' }];
+  const { sync } = installChrome();
+  await saveShortcuts(shortcuts);
+  const meta = sync.data.nv_shortcuts_meta;
+  delete sync.data[`nv_shortcuts_v2_${meta.generation}_0`];
+
+  const originalWarn = console.warn;
+  let loaded;
+  try {
+    console.warn = () => {};
+    loaded = await loadAll();
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(loaded.shortcuts[0].url, shortcuts[0].url);
+  assert.match(loaded.storageWarning, /本机最近一次可用备份/);
+});
+
 test('快捷方式与分组通过同一元数据指针提交', async () => {
   const { sync } = installChrome();
   const groups = [
@@ -217,4 +298,27 @@ test('一键清除只删除 Navigator 命名空间数据', async () => {
 
   assert.deepEqual(sync.data, { unrelated: 'keep' });
   assert.deepEqual(local.data, { cache: 'keep' });
+});
+
+test('书签导入快照可整体恢复快捷方式、分组和本地图标', async () => {
+  installChrome();
+  const customIcon = `data:image/png;base64,${'a'.repeat(24)}`;
+  const original = {
+    shortcuts: [{ id: 'a', title: '原站点', url: 'https://original.test/', groupId: 'work', customIcon }],
+    groups: [{ id: 'work', title: '工作', collapsed: false }],
+  };
+  await saveShortcutState(original);
+  await saveImportSnapshot(original);
+  await saveShortcutState({
+    shortcuts: [{ id: 'b', title: '导入站点', url: 'https://imported.test/', groupId: 'default' }],
+    groups: [],
+  });
+
+  assert.ok(await getImportSnapshot());
+  await restoreImportSnapshot();
+  const restored = await loadAll();
+  assert.equal(restored.shortcuts[0].url, original.shortcuts[0].url);
+  assert.equal(restored.shortcuts[0].customIcon, customIcon);
+  assert.equal(restored.groups.some((group) => group.id === 'work'), true);
+  assert.equal(await getImportSnapshot(), null);
 });

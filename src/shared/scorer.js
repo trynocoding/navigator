@@ -134,7 +134,7 @@ export function decayedScore(visitTimes, now = Date.now(), halfLifeDays = 7) {
  * blocked:     string[] 屏蔽的 origin
  * pinnedOrigins: string[] 已在快捷区的 origin（去重不展示）
  */
-export function rankOrigins(aggregated, { now = Date.now(), limit = 12, blocked = [], pinnedOrigins = [], minVisits = 2, windowDays = 30 } = {}) {
+export function rankOrigins(aggregated, { now = Date.now(), limit = 12, blocked = [], pinnedOrigins = [], minVisits = 2, windowDays = 30, halfLifeDays = 7 } = {}) {
   const blockedSet = new Set(blocked);
   const pinnedSet = new Set(pinnedOrigins);
   const windowStart = now - windowDays * DAY_MS;
@@ -147,7 +147,7 @@ export function rankOrigins(aggregated, { now = Date.now(), limit = 12, blocked 
         host: item.host,
         visits: times.length,
         lastVisit: times.length ? Math.max(...times) : 0,
-        score: decayedScore(times, now),
+        score: decayedScore(times, now, halfLifeDays),
         title: bestTitle(item.titles),
       };
     })

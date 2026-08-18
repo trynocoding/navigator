@@ -12,7 +12,16 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "optional_permissions": ["history"],
-  "permissions": ["storage", "favicon"],
+  "optional_permissions": ["history", "bookmarks"],
+  "permissions": ["storage", "favicon", "activeTab"],
+  "action": {
+    "default_title": "保存到 Navigator",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "options_page": "index.html"
 }

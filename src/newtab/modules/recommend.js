@@ -7,28 +7,36 @@ import {
   selectHistoryCandidates,
 } from '../../shared/scorer.js';
 import { makeIconEl } from '../../shared/favicon.js';
+import { resolveRecommendProfile } from '../../shared/recommendation.js';
 
-const WINDOW_DAYS = 30;
 const TOP_N = 12;
 const CANDIDATE_ORIGINS = 60;
 const CANDIDATE_URLS_PER_ORIGIN = 2;
 
 export class Recommend {
-  constructor(grid, hintEl, toggleBtn) {
+  constructor(grid, hintEl, toggleBtn, descriptionEl) {
     this.grid = grid;
     this.hintEl = hintEl;
     this.toggleBtn = toggleBtn;
+    this.descriptionEl = descriptionEl;
     this.blocked = [];
     this.faviconSource = 'chrome';
+    this.windowDays = 30;
+    this.mode = 'stable';
     this.onPin = null; // 由 main 注入：固定到快捷区
     this.onEnable = null; // 由 main 注入：申请权限并保存设置
     this.onDisable = null; // 由 main 注入：设置里关闭
     this.onBlock = null; // 由 main 注入：保存屏蔽并提供撤销
   }
 
-  setState({ blocked, faviconSource, enabled }) {
+  setState({ blocked, faviconSource, enabled, windowDays = 30, mode = 'stable' }) {
     this.blocked = blocked;
     this.faviconSource = faviconSource;
+    this.windowDays = [7, 30, 90].includes(Number(windowDays)) ? Number(windowDays) : 30;
+    this.mode = resolveRecommendProfile(mode).id;
+    if (this.descriptionEl) {
+      this.descriptionEl.textContent = `近 ${this.windowDays} 天 · 本机分析`;
+    }
     this.toggleBtn.textContent = enabled ? '暂停推荐' : '开启推荐';
     this.toggleBtn.onclick = () => (enabled ? this.onDisable?.() : this.onEnable?.());
     if (!enabled) {
@@ -42,12 +50,13 @@ export class Recommend {
   async refresh() {
     const hasPerm = await chrome.permissions.contains({ permissions: ['history'] });
     if (!hasPerm) {
-      this.showHint('浏览记录权限已关闭，请暂停后重新开启推荐。');
+      this.showHint('浏览记录权限已关闭，请在设置中重新授权，或暂停推荐。');
       return;
     }
     const sites = await fetchRankedSites({
       limit: TOP_N,
-      windowDays: WINDOW_DAYS,
+      windowDays: this.windowDays,
+      mode: this.mode,
       blocked: this.blocked,
       pinnedOrigins: this.onPin ? this.pinnedOrigins : [],
     });
@@ -87,7 +96,7 @@ export class Recommend {
 
       const sub = document.createElement('span');
       sub.className = 'tile-sub';
-      sub.textContent = `${site.visits} 次访问`;
+      sub.textContent = `${site.visits} 次`;
       a.append(sub);
 
       const actions = document.createElement('div');
@@ -136,7 +145,7 @@ export class Recommend {
 }
 
 // 拉取 + 评分：按 origin 平衡频次/近期性初筛 -> getVisits 精确计算 -> 衰减评分
-export async function fetchRankedSites({ limit, windowDays, blocked, pinnedOrigins }) {
+export async function fetchRankedSites({ limit, windowDays, blocked, pinnedOrigins, mode = 'stable' }) {
   const now = Date.now();
   const startTime = now - windowDays * 86400000;
 
@@ -144,6 +153,7 @@ export async function fetchRankedSites({ limit, windowDays, blocked, pinnedOrigi
   const candidates = selectHistoryCandidates(items, {
     maxOrigins: CANDIDATE_ORIGINS,
     maxUrlsPerOrigin: CANDIDATE_URLS_PER_ORIGIN,
+    frequencyShare: resolveRecommendProfile(mode).frequencyShare,
   });
 
   const detailed = await Promise.all(
@@ -163,6 +173,7 @@ export async function fetchRankedSites({ limit, windowDays, blocked, pinnedOrigi
     blocked,
     pinnedOrigins,
     windowDays,
-    minVisits: 2,
+    minVisits: resolveRecommendProfile(mode).minVisits,
+    halfLifeDays: resolveRecommendProfile(mode).halfLifeDays,
   });
 }

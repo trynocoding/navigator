@@ -30,5 +30,19 @@ export const DEFAULT_SETTINGS = {
   customEngine: 'https://example.com/search?q=%s',
   faviconSource: 'chrome',
   recommendEnabled: false,
+  recommendWindowDays: 30,
+  recommendMode: 'stable',
+  quickSaveGroupId: 'default',
   welcomeDismissed: false,
 };
+
+export const RECOMMEND_WINDOWS = [
+  { value: 7, label: '近 7 天' },
+  { value: 30, label: '近 30 天' },
+  { value: 90, label: '近 90 天' },
+];
+
+export const RECOMMEND_MODES = [
+  { id: 'stable', label: '更稳定', description: '更看重持续访问，不容易频繁变化' },
+  { id: 'sensitive', label: '更灵敏', description: '更快响应最近新增的访问习惯' },
+];

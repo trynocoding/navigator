@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>保存到 Navigator</title>
+    <link rel="stylesheet" href="./src/newtab/styles/themes.css" />
+    <link rel="stylesheet" href="./src/popup/popup.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-head">
+        <span class="popup-mark" aria-hidden="true">N</span>
+        <div><h1>保存到 Navigator</h1><p>把当前页面放进你的快捷方式</p></div>
+      </header>
+
+      <section id="popup-loading" class="popup-state">正在读取当前页面…</section>
+      <section id="popup-unsupported" class="popup-state" hidden>
+        <strong>这个页面无法保存</strong>
+        <p>浏览器内部页面和扩展页面不提供给快捷方式读取。</p>
+      </section>
+      <section id="popup-duplicate" class="popup-state" hidden>
+        <strong>已经保存过</strong>
+        <p id="popup-duplicate-copy"></p>
+        <button id="popup-open-newtab" type="button" class="popup-secondary">打开 Navigator</button>
+      </section>
+
+      <form id="popup-form" hidden>
+        <div class="popup-page">
+          <span id="popup-letter" class="popup-page-icon" aria-hidden="true"></span>
+          <div><strong id="popup-page-title"></strong><span id="popup-page-host"></span></div>
+        </div>
+        <label for="popup-title">名称</label>
+        <input id="popup-title" name="title" type="text" maxlength="40" required />
+        <label for="popup-group">保存到</label>
+        <select id="popup-group" name="groupId"></select>
+        <p id="popup-message" class="popup-message" role="status" hidden></p>
+        <button id="popup-save" type="submit" class="popup-primary">保存当前页面</button>
+      </form>
+    </main>
+    <script type="module" src="./src/popup/main.js"></script>
+  </body>
+</html>

@@ -78,12 +78,14 @@ export class Shortcuts {
     toggle.type = 'button';
     toggle.className = 'group-toggle';
     toggle.setAttribute('aria-expanded', String(!group.collapsed));
-    toggle.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg><strong>${escapeHtml(group.title)}</strong><span>${this.collection.itemsIn(group.id).length}</span>`;
+    toggle.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg><strong>${escapeHtml(group.title)}</strong>`;
     toggle.onclick = async () => {
       this.collection.toggleGroup(group.id);
       await this.persist();
     };
-    header.append(toggle);
+    const isFilteredGroup = this.activeGroupId !== 'all';
+    if (!isFilteredGroup) header.append(toggle);
+    else header.classList.add('filtered-group-head');
 
     const manage = document.createElement('button');
     manage.type = 'button';
@@ -91,6 +93,7 @@ export class Shortcuts {
     manage.setAttribute('aria-label', `管理分组 ${group.title}`);
     manage.textContent = '•••';
     manage.onclick = (event) => {
+      event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
       this.openGroupMenu(rect.right, rect.bottom + 6, group);
     };
@@ -99,7 +102,7 @@ export class Shortcuts {
 
     const grid = document.createElement('div');
     grid.className = 'grid shortcut-group-grid';
-    grid.hidden = group.collapsed;
+    grid.hidden = !isFilteredGroup && group.collapsed;
     grid.addEventListener('dragover', (event) => {
       if (!this.dragId) return;
       event.preventDefault();
@@ -120,7 +123,7 @@ export class Shortcuts {
     if (!items.length) {
       const hint = document.createElement('p');
       hint.className = 'group-empty';
-      hint.textContent = '拖入快捷方式，或在这里添加';
+      hint.textContent = '拖入或添加快捷方式';
       grid.append(hint);
     }
     section.append(grid);
@@ -194,15 +197,10 @@ export class Shortcuts {
     addMenuItem(menu, '打开', () => { window.location.href = shortcut.url; });
     addMenuItem(menu, '新标签页打开', () => window.open(shortcut.url, '_blank', 'noopener'));
     addMenuItem(menu, '编辑', () => this.edit(shortcut));
-    for (const group of this.collection.groups) {
-      if (group.id !== shortcut.groupId) {
-        addMenuItem(menu, `移至 · ${group.title}`, async () => {
-          this.collection.moveToGroup(shortcut.id, group.id);
-          await this.persist();
-        });
-      }
+    if (this.collection.groups.length > 1) {
+      addMenuItem(menu, '移动到…', () => this.openMoveMenu(x, y, shortcut));
     }
-    addMenuItem(menu, '置于分组顶部', async () => {
+    addMenuItem(menu, '移到最前', async () => {
       const first = this.collection.itemsIn(shortcut.groupId)[0];
       if (first && first.id !== shortcut.id) {
         this.collection.moveBefore(shortcut.id, first.id, shortcut.groupId);
@@ -210,6 +208,23 @@ export class Shortcuts {
       }
     });
     addMenuItem(menu, '删除', () => this.remove(shortcut.id), 'danger');
+    positionMenu(menu, x, y);
+  }
+
+  openMoveMenu(x, y, shortcut) {
+    closeMenu();
+    const menu = makeMenu();
+    addMenuItem(menu, '← 返回', () => this.openMenu(x, y, shortcut), 'menu-back');
+    for (const group of this.collection.groups) {
+      const isCurrent = group.id === shortcut.groupId;
+      const item = addMenuItem(menu, `${isCurrent ? '✓ ' : ''}${group.title}`, async () => {
+        if (isCurrent) return;
+        this.collection.moveToGroup(shortcut.id, group.id);
+        await this.persist();
+      }, isCurrent ? 'menu-current' : '');
+      item.disabled = isCurrent;
+      if (isCurrent) item.setAttribute('aria-current', 'true');
+    }
     positionMenu(menu, x, y);
   }
 
@@ -336,11 +351,13 @@ function addMenuItem(menu, label, action, className = '') {
   button.setAttribute('role', 'menuitem');
   button.textContent = label;
   button.className = className;
-  button.onclick = () => {
+  button.onclick = (event) => {
+    event.stopPropagation();
     closeMenu();
     action();
   };
   menu.append(button);
+  return button;
 }
 
 let activeMenu = null;

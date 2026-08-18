@@ -29,30 +29,62 @@ if (!globalThis.chrome?.storage) {
       },
     };
   };
-  let historyGranted = localStorage.getItem('navigator-dev-history') === '1';
+  const grantedPermissions = new Set(JSON.parse(localStorage.getItem('navigator-dev-permissions') || '[]'));
+  const migratedHistoryPermission = localStorage.getItem('navigator-dev-history') === '1';
+  if (migratedHistoryPermission) {
+    grantedPermissions.add('history');
+    localStorage.removeItem('navigator-dev-history');
+  }
+  const persistPermissions = () => localStorage.setItem('navigator-dev-permissions', JSON.stringify([...grantedPermissions]));
+  if (migratedHistoryPermission) persistPermissions();
+  const demoNow = Date.now();
+  const demoHistory = [
+    { url: 'https://www.figma.com/files', title: 'Figma', visitCount: 5, lastVisitTime: demoNow - 2 * 3600000 },
+    { url: 'https://www.notion.so/', title: 'Notion', visitCount: 3, lastVisitTime: demoNow - 86400000 },
+  ];
   globalThis.chrome = {
     ...globalThis.chrome,
     storage: { sync: makeArea('sync'), local: makeArea('local') },
     permissions: {
-      async contains({ permissions }) { return !permissions.includes('history') || historyGranted; },
+      async contains({ permissions }) { return permissions.every((permission) => grantedPermissions.has(permission)); },
       async request({ permissions }) {
-        if (permissions.includes('history')) {
-          historyGranted = true;
-          localStorage.setItem('navigator-dev-history', '1');
-        }
+        permissions.forEach((permission) => grantedPermissions.add(permission));
+        persistPermissions();
         return true;
       },
       async remove({ permissions }) {
-        if (permissions.includes('history')) {
-          historyGranted = false;
-          localStorage.removeItem('navigator-dev-history');
-        }
+        permissions.forEach((permission) => grantedPermissions.delete(permission));
+        persistPermissions();
         return true;
       },
     },
     history: {
-      async search() { return []; },
-      async getVisits() { return []; },
+      async search() { return structuredClone(demoHistory); },
+      async getVisits({ url }) {
+        const item = demoHistory.find((entry) => entry.url === url);
+        if (!item) return [];
+        return Array.from({ length: item.visitCount }, (_, index) => ({
+          visitTime: item.lastVisitTime - index * 86400000,
+        }));
+      },
+    },
+    tabs: {
+      async query() {
+        return [{ id: 1, title: 'Chrome Extensions 文档', url: 'https://developer.chrome.com/docs/extensions/' }];
+      },
+      async create({ url }) { window.open(url, '_blank', 'noopener'); },
+    },
+    bookmarks: {
+      async getTree() {
+        return [{ id: '0', title: '', children: [{ id: '1', title: '书签栏', children: [
+          { id: 'a', title: 'Chrome Extensions', url: 'https://developer.chrome.com/docs/extensions/' },
+          { id: 'b', title: 'GitHub', url: 'https://github.com/' },
+          { id: '2', title: '工作', children: [{ id: 'c', title: 'MDN', url: 'https://developer.mozilla.org/' }] },
+        ] }] }];
+      },
+    },
+    runtime: {
+      getURL(path) { return new URL(path, location.origin).href; },
     },
   };
 }

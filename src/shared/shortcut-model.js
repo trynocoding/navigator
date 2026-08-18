@@ -35,15 +35,28 @@ export class ShortcutCollection {
   }
 
   add(input, groupId = DEFAULT_GROUP_ID) {
+    if (!isNavigableUrl(input.url)) return { ok: false, reason: 'invalid', input };
     const duplicate = this.findDuplicate(input.url);
     if (duplicate) return { ok: false, reason: 'duplicate', duplicate };
     const item = {
       ...input,
       id: input.id || createId('s'),
+      title: String(input.title || '').trim().slice(0, 40) || hostOf(input.url) || input.url,
       groupId: this.hasGroup(groupId) ? groupId : DEFAULT_GROUP_ID,
     };
     this.shortcuts.push(item);
     return { ok: true, item };
+  }
+
+  addMany(inputs, groupId = DEFAULT_GROUP_ID) {
+    const result = { added: [], duplicates: [], invalid: [] };
+    for (const input of Array.isArray(inputs) ? inputs : []) {
+      const added = this.add(input, input.groupId || groupId);
+      if (added.ok) result.added.push(added.item);
+      else if (added.reason === 'duplicate') result.duplicates.push({ input, duplicate: added.duplicate });
+      else result.invalid.push(input);
+    }
+    return result;
   }
 
   update(id, input) {
@@ -207,6 +220,14 @@ export function canonicalUrl(value) {
     return url.href;
   } catch {
     return '';
+  }
+}
+
+export function isNavigableUrl(value) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
   }
 }
 

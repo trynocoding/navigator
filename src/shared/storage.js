@@ -10,6 +10,9 @@ const KEYS = {
   shortcutsMeta: 'nv_shortcuts_meta',
   blocked: 'nv_blocked',
   customIcons: 'nv_custom_icons',
+  importSnapshot: 'nv_import_snapshot',
+  shortcutsBackup: 'nv_shortcuts_backup',
+  shortcutsCorruptBackup: 'nv_shortcuts_corrupt_backup',
 };
 
 const SHORTCUT_SCHEMA_VERSION = 2;
@@ -24,10 +27,10 @@ export async function loadAll() {
       KEYS.shortcutsMeta,
       KEYS.blocked,
     ]),
-    chrome.storage.local.get(KEYS.customIcons),
+    chrome.storage.local.get([KEYS.customIcons, KEYS.shortcutsBackup]),
   ]);
 
-  const loaded = await loadShortcutRecords(data);
+  const loaded = await loadShortcutRecords(data, localData[KEYS.shortcutsBackup]);
   const shortcuts = normalizeShortcuts(
     loaded.records,
     localData[KEYS.customIcons] || {},
@@ -42,6 +45,8 @@ export async function loadAll() {
     } catch (error) {
       console.warn('[navigator] 快捷方式存储迁移失败，将继续使用旧数据。', error);
     }
+  } else if (loaded.source === 'v2') {
+    await saveLocalShortcutBackup(shortcuts, groups);
   }
 
   return {
@@ -49,6 +54,7 @@ export async function loadAll() {
     shortcuts,
     groups,
     blocked: data[KEYS.blocked] || [],
+    storageWarning: loaded.warning || '',
   };
 }
 
@@ -77,7 +83,10 @@ export async function saveShortcutState({ shortcuts, groups }) {
 
   await saveShortcutRecords(syncedShortcuts, normalizedGroups);
   // 图片很容易超过 sync 单项限制，因此只在本机存储图标数据。
-  await chrome.storage.local.set({ [KEYS.customIcons]: customIcons });
+  await chrome.storage.local.set({
+    [KEYS.customIcons]: customIcons,
+    [KEYS.shortcutsBackup]: makeShortcutBackup(syncedShortcuts, normalizedGroups),
+  });
 }
 
 export function saveBlocked(blocked) {
@@ -120,9 +129,39 @@ export async function clearAllData() {
   ]);
 }
 
+export async function saveImportSnapshot({ shortcuts, groups }) {
+  const snapshot = {
+    version: 1,
+    createdAt: Date.now(),
+    shortcuts: normalizeShortcuts(shortcuts),
+    groups: normalizeGroups(groups),
+  };
+  await chrome.storage.local.set({ [KEYS.importSnapshot]: snapshot });
+  return snapshot;
+}
+
+export async function getImportSnapshot() {
+  const data = await chrome.storage.local.get(KEYS.importSnapshot);
+  const snapshot = data[KEYS.importSnapshot];
+  if (snapshot?.version !== 1 || !Array.isArray(snapshot.shortcuts)) return null;
+  return {
+    ...snapshot,
+    shortcuts: normalizeShortcuts(snapshot.shortcuts),
+    groups: normalizeGroups(snapshot.groups),
+  };
+}
+
+export async function restoreImportSnapshot() {
+  const snapshot = await getImportSnapshot();
+  if (!snapshot) return null;
+  await saveShortcutState(snapshot);
+  await chrome.storage.local.remove(KEYS.importSnapshot);
+  return snapshot;
+}
+
 // ---- 内部 ----
 
-async function loadShortcutRecords(initialData) {
+async function loadShortcutRecords(initialData, localBackup) {
   const meta = initialData[KEYS.shortcutsMeta];
   if (isShortcutMeta(meta)) {
     try {
@@ -132,7 +171,7 @@ async function loadShortcutRecords(initialData) {
       // 重新读取一次元数据即可切到最新一代，避免把正常并发误判为损坏。
       const latestData = await chrome.storage.sync.get(KEYS.shortcutsMeta);
       const latestMeta = latestData[KEYS.shortcutsMeta];
-      if (isShortcutMeta(latestMeta) && latestMeta.generation !== meta.generation) {
+      if (isShortcutMeta(latestMeta)) {
         try {
           return { records: await readShortcutGeneration(latestMeta), groups: latestMeta.groups, source: 'v2' };
         } catch {
@@ -144,13 +183,90 @@ async function loadShortcutRecords(initialData) {
         console.warn('[navigator] 新版快捷方式数据不完整，已回退旧版数据。', initialError);
         return { records: legacy, groups: [], source: 'legacy' };
       }
-      throw new Error(`快捷方式同步数据损坏：${initialError.message}`);
+      return recoverCorruptShortcutRecords(meta, initialError, localBackup);
     }
   }
 
   const legacy = initialData[KEYS.shortcutsLegacy];
   if (Array.isArray(legacy)) return { records: legacy, groups: [], source: 'legacy' };
   return { records: [], groups: [], source: 'empty' };
+}
+
+async function recoverCorruptShortcutRecords(meta, error, localBackup) {
+  let syncData = {};
+  try {
+    syncData = await chrome.storage.sync.get(null);
+  } catch (readError) {
+    console.warn('[navigator] 无法读取完整的损坏同步数据。', readError);
+  }
+  const shortcutSyncData = Object.fromEntries(
+    Object.entries(syncData).filter(([key]) => (
+      key === KEYS.shortcutsMeta
+      || key === KEYS.shortcutsLegacy
+      || key.startsWith(SHORTCUT_CHUNK_PREFIX)
+    )),
+  );
+  try {
+    await chrome.storage.local.set({
+      [KEYS.shortcutsCorruptBackup]: {
+        version: 1,
+        capturedAt: Date.now(),
+        reason: error.message,
+        meta: structuredClone(meta),
+        syncData: shortcutSyncData,
+      },
+    });
+  } catch (backupError) {
+    console.warn('[navigator] 无法在本机保留损坏的同步数据。', backupError);
+  }
+
+  if (isLocalShortcutBackup(localBackup)) {
+    console.warn('[navigator] 快捷方式同步数据异常，已从本机备份恢复。', error);
+    return {
+      records: localBackup.shortcuts,
+      groups: localBackup.groups,
+      source: 'recovered',
+      warning: '检测到快捷方式同步数据异常，已从本机最近一次可用备份恢复；原始数据已保留在本机。',
+    };
+  }
+
+  const records = shortcutChunkKeys(meta.generation, meta.chunkCount)
+    .flatMap((key) => Array.isArray(shortcutSyncData[key]) ? shortcutSyncData[key] : []);
+  console.warn('[navigator] 快捷方式同步数据异常，已保全仍可读取的数据。', error);
+  return {
+    records,
+    groups: meta.groups,
+    source: 'recovered',
+    warning: records.length
+      ? `检测到快捷方式同步数据异常，已保全 ${records.length} 个仍可读取的快捷方式；原始数据已保留在本机。`
+      : '检测到快捷方式同步数据异常，暂时以空列表启动；原始数据已保留在本机。',
+  };
+}
+
+function makeShortcutBackup(shortcuts, groups) {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    shortcuts: structuredClone(shortcuts),
+    groups: structuredClone(groups),
+  };
+}
+
+function isLocalShortcutBackup(value) {
+  return value?.version === 1
+    && Array.isArray(value.shortcuts)
+    && Array.isArray(value.groups);
+}
+
+async function saveLocalShortcutBackup(shortcuts, groups) {
+  try {
+    await chrome.storage.local.set({
+      [KEYS.shortcutsBackup]: makeShortcutBackup(shortcuts, groups),
+    });
+  } catch (error) {
+    // 本地备份失败不应阻止已同步的数据加载与使用。
+    console.warn('[navigator] 无法更新快捷方式本机备份。', error);
+  }
 }
 
 async function readShortcutGeneration(meta) {

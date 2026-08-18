@@ -5,17 +5,24 @@ import '../shared/chrome-shim.js';
 import { ENGINES, DEFAULT_SETTINGS } from '../shared/constants.js';
 import {
   clearAllData,
+  getImportSnapshot,
   loadAll,
+  restoreImportSnapshot,
+  saveImportSnapshot,
   saveBlocked,
   saveSettings,
+  saveShortcutState,
 } from '../shared/storage.js';
+import { flattenBookmarkTree } from '../shared/bookmark-import.js';
+import { ShortcutCollection } from '../shared/shortcut-model.js';
 import { Shortcuts } from './modules/shortcuts.js';
 import { Recommend } from './modules/recommend.js';
 import { openSettingsDialog } from './modules/settings.js';
+import { openBookmarkImportDialog } from './modules/bookmark-import-dialog.js';
 import { Toast } from './modules/toast.js';
 
 const $ = (selector) => document.querySelector(selector);
-const state = { settings: { ...DEFAULT_SETTINGS }, blocked: [] };
+const state = { settings: { ...DEFAULT_SETTINGS }, blocked: [], storageWarning: '' };
 const toast = new Toast($('#toast-region'));
 const shortcuts = new Shortcuts(
   $('#shortcuts-grid'),
@@ -26,6 +33,7 @@ const recommend = new Recommend(
   $('#recommend-grid'),
   $('#recommend-hint'),
   $('#btn-recommend-toggle'),
+  $('#recommend-description'),
 );
 
 init().catch((error) => console.error('[navigator] 初始化失败:', error));
@@ -58,20 +66,33 @@ async function init() {
   $('#btn-settings').addEventListener('click', openSettings);
   $('#btn-add-shortcut').addEventListener('click', () => shortcuts.add());
   $('#btn-add-group').addEventListener('click', () => shortcuts.addGroup());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshFromStorage();
+  });
+  showStorageWarning(loaded.storageWarning);
 }
 
 async function openSettings() {
-  const permissionGranted = await chrome.permissions.contains({ permissions: ['history'] });
+  const [permissionGranted, bookmarksGranted, importSnapshot] = await Promise.all([
+    chrome.permissions.contains({ permissions: ['history'] }),
+    chrome.permissions.contains({ permissions: ['bookmarks'] }),
+    getImportSnapshot(),
+  ]);
   openSettingsDialog({
     settings: state.settings,
     blocked: state.blocked,
     permissionGranted,
+    bookmarksGranted,
+    hasImportSnapshot: Boolean(importSnapshot),
   }, {
     onApply: applyUserSettings,
     onRevokeHistory: revokeHistory,
     onRestoreBlocked: restoreBlocked,
     onImported: applyImportedState,
     onClearData: clearNavigatorData,
+    onImportBookmarks: importChromeBookmarks,
+    onRestoreImport: restoreBookmarkImport,
+    onRevokeBookmarks: () => chrome.permissions.remove({ permissions: ['bookmarks'] }),
   });
 }
 
@@ -86,13 +107,74 @@ async function applySettings(next, persist) {
     blocked: state.blocked,
     faviconSource: next.faviconSource,
     enabled: next.recommendEnabled,
+    windowDays: next.recommendWindowDays,
+    mode: next.recommendMode,
   });
   if (persist) await saveSettings(next);
   if (previous.faviconSource !== next.faviconSource) shortcuts.render();
 }
 
+async function importChromeBookmarks() {
+  // permissions.request 必须直接由点击手势触发；已授权时会直接返回 true。
+  const granted = await chrome.permissions.request({ permissions: ['bookmarks'] });
+  if (!granted) return { ok: false, message: '需要书签读取权限才能导入；Navigator 不会修改 Chrome 原书签。' };
+
+  const parsed = flattenBookmarkTree(await chrome.bookmarks.getTree());
+  const selection = await openBookmarkImportDialog({
+    ...parsed,
+    shortcuts: shortcuts.shortcuts,
+    groups: shortcuts.groups,
+  });
+  if (!selection) return null;
+
+  // 导入弹窗打开期间，工具栏仍可能保存新页面；提交前以最新同步状态合并，避免覆盖。
+  const latest = await loadAll();
+  const collection = new ShortcutCollection(latest.shortcuts, latest.groups);
+  const result = collection.addMany(selection.candidates, selection.groupId);
+  if (!result.added.length) return { ok: false, message: '所选书签均已存在，没有需要导入的内容。' };
+  await saveImportSnapshot({ shortcuts: latest.shortcuts, groups: latest.groups });
+  await saveShortcutState(collection.snapshot());
+  shortcuts.setState(collection.shortcuts, collection.groups, state.settings.faviconSource);
+  recommend.setPinnedOrigins(shortcuts.pinnedOrigins);
+  if (state.settings.recommendEnabled) await recommend.refresh();
+  toast.show(`已导入 ${result.added.length} 个书签${result.duplicates.length ? `，跳过 ${result.duplicates.length} 个重复` : ''}`, {
+    label: '整体撤销',
+    action: restoreBookmarkImport,
+    duration: 9000,
+  });
+  return { ok: true, result };
+}
+
+async function restoreBookmarkImport() {
+  const snapshot = await restoreImportSnapshot();
+  if (!snapshot) return false;
+  shortcuts.setState(snapshot.shortcuts, snapshot.groups, state.settings.faviconSource);
+  recommend.setPinnedOrigins(shortcuts.pinnedOrigins);
+  if (state.settings.recommendEnabled) await recommend.refresh();
+  toast.show('已恢复到书签导入前的状态');
+  return true;
+}
+
+async function refreshFromStorage() {
+  const loaded = await loadAll();
+  state.blocked = loaded.blocked;
+  shortcuts.setState(loaded.shortcuts, loaded.groups, loaded.settings.faviconSource);
+  await applySettings(loaded.settings, false);
+  showStorageWarning(loaded.storageWarning);
+}
+
+function showStorageWarning(message) {
+  if (!message) {
+    state.storageWarning = '';
+    return;
+  }
+  if (message === state.storageWarning) return;
+  state.storageWarning = message;
+  toast.show(message, { duration: 12000 });
+}
+
 async function applyUserSettings(next) {
-  if (next.recommendEnabled && !state.settings.recommendEnabled) {
+  if (next.recommendEnabled) {
     const granted = await chrome.permissions.request({ permissions: ['history'] });
     if (!granted) {
       return { ok: false, message: '需要浏览记录权限才能开启推荐。你可以稍后再次尝试。' };
@@ -305,14 +387,12 @@ function buildTarget(query) {
 function initClock() {
   const timeElement = $('#clock-time');
   const dateElement = $('#clock-date');
-  const greetingElement = $('#greeting');
   const week = ['日', '一', '二', '三', '四', '五', '六'];
   const update = () => {
     const date = new Date();
     const hour = date.getHours();
     timeElement.textContent = `${String(hour).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     dateElement.textContent = `${date.getMonth() + 1}月${date.getDate()}日 · 星期${week[date.getDay()]}`;
-    greetingElement.textContent = hour < 6 ? '夜深了，慢一点也没关系' : hour < 11 ? '早上好，开启清晰的一天' : hour < 14 ? '中午好，继续保持节奏' : hour < 18 ? '下午好，专注下一件事' : '晚上好，收好今天的灵感';
   };
   update();
   setInterval(update, 1000);
