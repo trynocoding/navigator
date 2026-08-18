@@ -39,7 +39,7 @@ export class Shortcuts {
     a.href = s.url;
     a.title = `${s.title}\n${s.url}`;
 
-    a.append(makeIconEl(s.url, this.faviconSource, s.title));
+    a.append(makeIconEl(s.url, this.faviconSource, s.title, s.customIcon));
     const name = document.createElement('span');
     name.className = 'tile-title';
     name.textContent = s.title;

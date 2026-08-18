@@ -438,6 +438,7 @@ select:focus-visible {
   width: 34px;
   height: 34px;
   border-radius: 9px;
+  object-fit: contain;
 }
 
 .icon-badge {
@@ -661,6 +662,74 @@ dialog h3 {
   line-height: 1.5;
 }
 
+.shortcut-icon-editor {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--bg);
+}
+
+.shortcut-icon-preview {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed var(--border-strong);
+  border-radius: 15px;
+  background: var(--surface-solid);
+  color: var(--text-subtle);
+}
+
+.shortcut-icon-preview.has-image {
+  border-style: solid;
+}
+
+.shortcut-icon-preview img {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.shortcut-icon-preview svg {
+  width: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.shortcut-icon-preview.has-image svg {
+  display: none;
+}
+
+.shortcut-icon-controls {
+  min-width: 0;
+}
+
+.shortcut-icon-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.icon-message {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.icon-message.is-success {
+  color: #3caf7b;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -689,6 +758,11 @@ dialog h3 {
 .btn-primary:hover {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
+}
+
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .btn-ghost {

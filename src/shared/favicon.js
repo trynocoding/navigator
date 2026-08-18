@@ -18,8 +18,8 @@ export function faviconUrl(pageUrl, source = 'chrome', size = 64) {
   }
 }
 
-// 生成 <span class="tile-icon">，含 img 与降级徽标
-export function makeIconEl(pageUrl, source, fallbackText) {
+// 生成 <span class="tile-icon">，优先自定义图标，再降级到站点图标与首字母徽标
+export function makeIconEl(pageUrl, source, fallbackText, customIcon = '') {
   const wrap = document.createElement('span');
   wrap.className = 'tile-icon';
   const text = (fallbackText || '').trim();
@@ -35,8 +35,17 @@ export function makeIconEl(pageUrl, source, fallbackText) {
   img.className = 'icon-img';
   img.alt = '';
   img.loading = 'lazy';
-  img.src = faviconUrl(pageUrl, source);
-  img.addEventListener('error', () => img.remove());
+  const siteIcon = faviconUrl(pageUrl, source);
+  let triedSiteIcon = !customIcon;
+  img.src = customIcon || siteIcon;
+  img.addEventListener('error', () => {
+    if (!triedSiteIcon) {
+      triedSiteIcon = true;
+      img.src = siteIcon;
+      return;
+    }
+    img.remove();
+  });
 
   wrap.append(img, badge);
   return wrap;
