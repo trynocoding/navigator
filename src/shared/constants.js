@@ -23,9 +23,16 @@ export const FAVICON_SOURCES = [
   { id: 'ddg', label: 'DuckDuckGo 图标' },
 ];
 
+export const PAGE_SCALE = {
+  min: 80,
+  max: 125,
+  step: 5,
+};
+
 export const DEFAULT_SETTINGS = {
   theme: 'auto',
   accent: '',
+  pageScale: 100,
   engine: 'google',
   customEngine: 'https://example.com/search?q=%s',
   faviconSource: 'chrome',
@@ -35,6 +42,13 @@ export const DEFAULT_SETTINGS = {
   quickSaveGroupId: 'default',
   welcomeDismissed: false,
 };
+
+export function normalizePageScale(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_SETTINGS.pageScale;
+  const stepped = Math.round(numeric / PAGE_SCALE.step) * PAGE_SCALE.step;
+  return Math.min(PAGE_SCALE.max, Math.max(PAGE_SCALE.min, stepped));
+}
 
 export const RECOMMEND_WINDOWS = [
   { value: 7, label: '近 7 天' },

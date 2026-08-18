@@ -251,7 +251,7 @@ test('同一代分片在第二次读取时到达会正常完成加载', async ()
   assert.equal(loaded.storageWarning, '');
 });
 
-test('同步分片完全缺失时使用本机最近一次完整备份', async () => {
+test('同步分片完全缺失时静默使用本机备份并修复同步副本', async () => {
   const shortcuts = [{ id: 'safe', title: '本机备份', url: 'https://safe.test/' }];
   const { sync } = installChrome();
   await saveShortcuts(shortcuts);
@@ -268,7 +268,61 @@ test('同步分片完全缺失时使用本机最近一次完整备份', async ()
   }
 
   assert.equal(loaded.shortcuts[0].url, shortcuts[0].url);
-  assert.match(loaded.storageWarning, /本机最近一次可用备份/);
+  assert.equal(loaded.storageWarning, '');
+  assert.notEqual(sync.data.nv_shortcuts_meta.generation, meta.generation);
+});
+
+test('本机备份恢复后重建同步分片，后续启动不再重复告警', async () => {
+  const shortcuts = [{ id: 'safe', title: '本机备份', url: 'https://safe.test/' }];
+  const { sync } = installChrome();
+  await saveShortcuts(shortcuts);
+  const corruptGeneration = sync.data.nv_shortcuts_meta.generation;
+  delete sync.data[`nv_shortcuts_v2_${corruptGeneration}_0`];
+
+  const originalWarn = console.warn;
+  const warnings = [];
+  let firstLoad;
+  let secondLoad;
+  try {
+    console.warn = (...args) => warnings.push(args);
+    firstLoad = await loadAll();
+    secondLoad = await loadAll();
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(firstLoad.shortcuts[0].url, shortcuts[0].url);
+  assert.equal(firstLoad.storageWarning, '');
+  assert.notEqual(sync.data.nv_shortcuts_meta.generation, corruptGeneration);
+  assert.equal(secondLoad.storageWarning, '');
+  assert.deepEqual(warnings, []);
+});
+
+test('远端再次带回同一损坏版本时静默使用备份且不重复回写', async () => {
+  const shortcuts = [{ id: 'safe', title: '本机备份', url: 'https://safe.test/' }];
+  const { sync, local } = installChrome();
+  await saveShortcuts(shortcuts);
+  const corruptMeta = structuredClone(sync.data.nv_shortcuts_meta);
+  delete sync.data[`nv_shortcuts_v2_${corruptMeta.generation}_0`];
+
+  let metaWrites = 0;
+  const baseSet = sync.set.bind(sync);
+  sync.set = async (entries) => {
+    if (Object.hasOwn(entries, 'nv_shortcuts_meta')) metaWrites += 1;
+    return baseSet(entries);
+  };
+
+  const firstLoad = await loadAll();
+  const repairedMeta = structuredClone(sync.data.nv_shortcuts_meta);
+  sync.data.nv_shortcuts_meta = structuredClone(corruptMeta);
+  const secondLoad = await loadAll();
+
+  assert.equal(firstLoad.storageWarning, '');
+  assert.equal(secondLoad.storageWarning, '');
+  assert.equal(metaWrites, 1);
+  assert.equal(sync.data.nv_shortcuts_meta.generation, corruptMeta.generation);
+  assert.equal(local.data.nv_shortcuts_repair_state.fingerprint.includes(corruptMeta.generation), true);
+  assert.notEqual(repairedMeta.generation, corruptMeta.generation);
 });
 
 test('快捷方式与分组通过同一元数据指针提交', async () => {

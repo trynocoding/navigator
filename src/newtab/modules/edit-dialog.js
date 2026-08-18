@@ -1,6 +1,7 @@
 // 新增/编辑站点对话框：原生 <dialog>，返回 Promise<值 | null>
 
 import { hostOf } from '../../shared/storage.js';
+import { findOnlineIcons } from './online-icons.js';
 
 const MAX_ICON_FILE_SIZE = 5 * 1024 * 1024;
 const ICON_SIZE = 128;
@@ -37,7 +38,7 @@ export function openEditDialog(existing, options = {}) {
         </select>
       </div>` : ''}
       <div class="form-row">
-        <span class="field-label" id="shortcut-icon-label">自定义图标（可选）</span>
+        <span class="field-label" id="shortcut-icon-label">图标（可选）</span>
         <div class="shortcut-icon-editor" aria-labelledby="shortcut-icon-label">
           <span class="shortcut-icon-preview" data-icon-preview>
             <img alt="自定义图标预览" hidden />
@@ -46,11 +47,16 @@ export function openEditDialog(existing, options = {}) {
           <div class="shortcut-icon-controls">
             <input id="shortcut-icon-file" name="iconFile" type="file" hidden accept=".png,.jpg,.jpeg,.webp,.gif,.ico,image/png,image/jpeg,image/webp,image/gif,image/x-icon,image/vnd.microsoft.icon" />
             <div class="shortcut-icon-buttons">
-              <button type="button" class="btn-ghost" data-action="choose-icon">选择图片</button>
+              <button type="button" class="btn-ghost" data-action="choose-icon">本地图片</button>
+              <button type="button" class="btn-ghost" data-action="find-icon">在线获取</button>
               <button type="button" class="btn-ghost" data-action="remove-icon">恢复网站图标</button>
             </div>
-            <p class="form-hint">支持 PNG、JPG、WebP、GIF 或 ICO，图片会自动缩放。</p>
+            <p class="form-hint">仅在点击时查询网站域名；选定图标保存在本机。</p>
             <p class="icon-message" role="status" aria-live="polite" hidden></p>
+            <section class="online-icon-picker" data-online-icon-picker hidden aria-label="在线图标候选">
+              <div class="online-icon-picker-head"><strong>选择图标</strong><span>保存后生效</span></div>
+              <div class="online-icon-options" role="listbox" aria-label="可用图标"></div>
+            </section>
           </div>
         </div>
       </div>
@@ -69,12 +75,16 @@ export function openEditDialog(existing, options = {}) {
   const groupInput = form.elements.namedItem('groupId');
   const saveButton = dlg.querySelector('[data-action="save"]');
   const chooseIconButton = dlg.querySelector('[data-action="choose-icon"]');
+  const findIconButton = dlg.querySelector('[data-action="find-icon"]');
   const removeIconButton = dlg.querySelector('[data-action="remove-icon"]');
   const iconPreview = dlg.querySelector('[data-icon-preview]');
   const previewImage = iconPreview.querySelector('img');
   const iconMessage = dlg.querySelector('.icon-message');
+  const onlineIconPicker = dlg.querySelector('[data-online-icon-picker]');
+  const onlineIconOptions = dlg.querySelector('.online-icon-options');
   let customIcon = existing?.customIcon || '';
   let processingIcon = false;
+  let iconSearchId = 0;
   titleInput.value = existing?.title || '';
   urlInput.value = existing?.url || '';
   if (groupInput) groupInput.value = existing?.groupId || options.groupId || groups[0]?.id;
@@ -115,6 +125,36 @@ export function openEditDialog(existing, options = {}) {
     };
 
     chooseIconButton.addEventListener('click', () => fileInput.click());
+    findIconButton.addEventListener('click', async () => {
+      const url = normalizeUrl(urlInput.value.trim());
+      if (!url) {
+        urlInput.setCustomValidity('请先输入有效的网址');
+        urlInput.reportValidity();
+        return;
+      }
+      urlInput.setCustomValidity('');
+      const searchId = ++iconSearchId;
+      processingIcon = true;
+      saveButton.disabled = true;
+      findIconButton.disabled = true;
+      clearOnlineIcons();
+      showIconMessage('正在查找图标…', false);
+      try {
+        const candidates = await findOnlineIcons(url, { title: titleInput.value.trim() });
+        if (searchId !== iconSearchId) return;
+        if (!candidates.length) throw new Error('没有找到可用图标，可改用本地图片');
+        renderOnlineIcons(candidates);
+        showIconMessage(`找到 ${candidates.length} 个候选，请选择一个`, false);
+      } catch (error) {
+        if (searchId === iconSearchId) {
+          showIconMessage(error.message || '在线获取失败，请稍后重试');
+        }
+      } finally {
+        processingIcon = false;
+        saveButton.disabled = false;
+        findIconButton.disabled = false;
+      }
+    });
     fileInput.addEventListener('change', async () => {
       const [file] = fileInput.files;
       fileInput.value = '';
@@ -125,6 +165,7 @@ export function openEditDialog(existing, options = {}) {
       showIconMessage('正在处理图片…');
       try {
         customIcon = await resizeIcon(file);
+        clearOnlineIcons();
         renderIconPreview();
         showIconMessage('已添加自定义图标', false);
       } catch (error) {
@@ -137,11 +178,16 @@ export function openEditDialog(existing, options = {}) {
 
     removeIconButton.addEventListener('click', () => {
       customIcon = '';
+      clearOnlineIcons();
       renderIconPreview();
       showIconMessage('保存后将恢复使用网站图标', false);
     });
 
-    urlInput.addEventListener('input', () => urlInput.setCustomValidity(''));
+    urlInput.addEventListener('input', () => {
+      iconSearchId += 1;
+      urlInput.setCustomValidity('');
+      clearOnlineIcons();
+    });
     dlg.querySelector('[data-action="cancel"]').onclick = () => finish(null);
     dlg.querySelector('[data-action="save"]').onclick = save;
     // 回车提交时保存而不是直接关闭
@@ -172,6 +218,36 @@ export function openEditDialog(existing, options = {}) {
     iconMessage.hidden = !message;
     iconMessage.textContent = message;
     iconMessage.classList.toggle('is-success', !isError);
+  }
+
+  function renderOnlineIcons(candidates) {
+    onlineIconOptions.textContent = '';
+    candidates.forEach((candidate, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'online-icon-choice';
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', 'false');
+      button.setAttribute('aria-label', `候选 ${index + 1}：${candidate.label}`);
+      button.innerHTML = `<img alt="" src="${candidate.dataUrl}" /><span>${escapeHtml(candidate.label)}</span>`;
+      button.addEventListener('click', () => {
+        customIcon = candidate.dataUrl;
+        renderIconPreview();
+        onlineIconOptions.querySelectorAll('.online-icon-choice').forEach((choice) => {
+          const selected = choice === button;
+          choice.classList.toggle('selected', selected);
+          choice.setAttribute('aria-selected', String(selected));
+        });
+        showIconMessage(`已选择${candidate.label}，保存后生效`, false);
+      });
+      onlineIconOptions.append(button);
+    });
+    onlineIconPicker.hidden = false;
+  }
+
+  function clearOnlineIcons() {
+    onlineIconPicker.hidden = true;
+    onlineIconOptions.textContent = '';
   }
 }
 

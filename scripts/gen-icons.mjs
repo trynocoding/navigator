@@ -1,104 +1,163 @@
-// 生成扩展图标：纯 Node 手写 PNG 编码（RGBA、deflate 压缩），无外部依赖
-// 图形：圆角方形蓝底 + 白色菱形罗盘针
+// 从 ImageGen 生成的品牌主图导出扩展所需尺寸，无运行时依赖。
 
-import { deflateSync } from 'node:zlib';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { deflateSync, inflateSync } from 'node:zlib';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SOURCE = join(ROOT, 'assets', 'brand', 'navigator-icon-source.png');
 const OUT_DIR = join(ROOT, 'public', 'icons');
-
-const BG = [79, 124, 255, 255]; // #4f7cff
-const WHITE = [255, 255, 255, 255];
-const DARK = [43, 74, 176, 255]; // 针尾
-
-// ---- 最小 PNG 编码器 ----
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let value = n;
+    for (let k = 0; k < 8; k += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    table[n] = value >>> 0;
   }
-  return t;
+  return table;
 })();
 
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
+function crc32(buffer) {
+  let value = 0xffffffff;
+  for (const byte of buffer) value = CRC_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
 }
 
 function chunk(type, data) {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
   const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
   const crc = Buffer.alloc(4);
   crc.writeUInt32BE(crc32(body));
-  return Buffer.concat([len, body, crc]);
+  return Buffer.concat([length, body, crc]);
 }
 
-function encodePNG(width, height, rgba) {
+function decodePng(buffer) {
+  if (!buffer.subarray(0, 8).equals(PNG_SIGNATURE)) throw new Error('品牌主图不是有效的 PNG');
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  const compressed = [];
+  while (offset < buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+    offset += length + 12;
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      if (data[8] !== 8 || data[9] !== 6 || data[12] !== 0) {
+        throw new Error('品牌主图必须是非隔行的 8-bit RGBA PNG');
+      }
+    } else if (type === 'IDAT') compressed.push(data);
+    else if (type === 'IEND') break;
+  }
+
+  const bytesPerPixel = 4;
+  const stride = width * bytesPerPixel;
+  const filtered = inflateSync(Buffer.concat(compressed));
+  const rgba = Buffer.alloc(stride * height);
+  let sourceOffset = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = filtered[sourceOffset];
+    sourceOffset += 1;
+    for (let x = 0; x < stride; x += 1) {
+      const raw = filtered[sourceOffset + x];
+      const left = x >= bytesPerPixel ? rgba[y * stride + x - bytesPerPixel] : 0;
+      const up = y ? rgba[(y - 1) * stride + x] : 0;
+      const upLeft = y && x >= bytesPerPixel ? rgba[(y - 1) * stride + x - bytesPerPixel] : 0;
+      let value;
+      if (filter === 0) value = raw;
+      else if (filter === 1) value = raw + left;
+      else if (filter === 2) value = raw + up;
+      else if (filter === 3) value = raw + Math.floor((left + up) / 2);
+      else if (filter === 4) value = raw + paeth(left, up, upLeft);
+      else throw new Error(`不支持的 PNG 过滤器：${filter}`);
+      rgba[y * stride + x] = value & 0xff;
+    }
+    sourceOffset += stride;
+  }
+  return { width, height, rgba };
+}
+
+function paeth(left, up, upLeft) {
+  const estimate = left + up - upLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const diagonalDistance = Math.abs(estimate - upLeft);
+  if (leftDistance <= upDistance && leftDistance <= diagonalDistance) return left;
+  return upDistance <= diagonalDistance ? up : upLeft;
+}
+
+function resize({ width, height, rgba }, size) {
+  const output = Buffer.alloc(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    const sourceY = (y + 0.5) * height / size - 0.5;
+    const y0 = Math.max(0, Math.floor(sourceY));
+    const y1 = Math.min(height - 1, y0 + 1);
+    const dy = Math.max(0, sourceY - y0);
+    for (let x = 0; x < size; x += 1) {
+      const sourceX = (x + 0.5) * width / size - 0.5;
+      const x0 = Math.max(0, Math.floor(sourceX));
+      const x1 = Math.min(width - 1, x0 + 1);
+      const dx = Math.max(0, sourceX - x0);
+      const samples = [
+        [x0, y0, (1 - dx) * (1 - dy)],
+        [x1, y0, dx * (1 - dy)],
+        [x0, y1, (1 - dx) * dy],
+        [x1, y1, dx * dy],
+      ];
+      let alpha = 0;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      for (const [sampleX, sampleY, weight] of samples) {
+        const index = (sampleY * width + sampleX) * 4;
+        const weightedAlpha = rgba[index + 3] / 255 * weight;
+        alpha += weightedAlpha;
+        red += rgba[index] * weightedAlpha;
+        green += rgba[index + 1] * weightedAlpha;
+        blue += rgba[index + 2] * weightedAlpha;
+      }
+      const outputIndex = (y * size + x) * 4;
+      if (alpha > 0) {
+        output[outputIndex] = Math.round(red / alpha);
+        output[outputIndex + 1] = Math.round(green / alpha);
+        output[outputIndex + 2] = Math.round(blue / alpha);
+      }
+      output[outputIndex + 3] = Math.round(alpha * 255);
+    }
+  }
+  return output;
+}
+
+function encodePng(width, height, rgba) {
   const stride = width * 4;
   const raw = Buffer.alloc((stride + 1) * height);
-  for (let y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0; // filter: None
+  for (let y = 0; y < height; y += 1) {
+    raw[y * (stride + 1)] = 0;
     rgba.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
   }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
   return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr),
+    PNG_SIGNATURE,
+    chunk('IHDR', header),
     chunk('IDAT', deflateSync(raw, { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
 
-// ---- 绘制 ----
-
-function roundedRectAlpha(x, y, size, radius) {
-  const cx = Math.min(Math.max(x, radius), size - radius);
-  const cy = Math.min(Math.max(y, radius), size - radius);
-  const dx = x - cx;
-  const dy = y - cy;
-  return dx * dx + dy * dy <= radius * radius;
-}
-
-function drawIcon(size) {
-  const rgba = Buffer.alloc(size * size * 4);
-  const c = (size - 1) / 2;
-  const rNeedle = size * 0.36;
-  const rHole = size * 0.18;
-  const radius = size * 0.22;
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      if (!roundedRectAlpha(x, y, size, radius)) continue; // 透明留默认 0
-
-      const l1 = Math.abs(x - c) + Math.abs(y - c);
-      let color = BG;
-      if (l1 <= rHole) color = WHITE; // 中心孔
-      else if (l1 <= rNeedle && l1 >= rNeedle - size * 0.09) {
-        // 菱形环：上半白（针尖），下半深蓝（针尾）
-        color = y < c ? WHITE : DARK;
-      }
-      rgba.set(color, i);
-    }
-  }
-  return rgba;
-}
-
+const source = decodePng(readFileSync(SOURCE));
 mkdirSync(OUT_DIR, { recursive: true });
 for (const size of [16, 48, 128]) {
-  const png = encodePNG(size, size, drawIcon(size));
-  const out = join(OUT_DIR, `icon${size}.png`);
-  writeFileSync(out, png);
-  console.log(`✓ ${out} (${png.length} bytes)`);
+  const output = join(OUT_DIR, `icon${size}.png`);
+  writeFileSync(output, encodePng(size, size, resize(source, size)));
+  console.log(`✓ ${output}`);
 }

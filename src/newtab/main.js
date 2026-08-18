@@ -2,7 +2,7 @@
 
 import '../shared/chrome-shim.js';
 
-import { ENGINES, DEFAULT_SETTINGS } from '../shared/constants.js';
+import { ENGINES, DEFAULT_SETTINGS, normalizePageScale } from '../shared/constants.js';
 import {
   clearAllData,
   getImportSnapshot,
@@ -61,7 +61,6 @@ async function init() {
 
   applySettings(loaded.settings, false);
   initSearch();
-  initClock();
 
   $('#btn-settings').addEventListener('click', openSettings);
   $('#btn-add-shortcut').addEventListener('click', () => shortcuts.add());
@@ -98,20 +97,26 @@ async function openSettings() {
 
 async function applySettings(next, persist) {
   const previous = state.settings;
-  state.settings = next;
-  applyTheme(next);
+  const settings = { ...next, pageScale: normalizePageScale(next.pageScale) };
+  state.settings = settings;
+  applyPageScale(settings.pageScale);
+  applyTheme(settings);
   renderEngineSelect();
-  shortcuts.setState(shortcuts.shortcuts, shortcuts.groups, next.faviconSource);
+  shortcuts.setState(shortcuts.shortcuts, shortcuts.groups, settings.faviconSource);
   recommend.setPinnedOrigins(shortcuts.pinnedOrigins);
   recommend.setState({
     blocked: state.blocked,
-    faviconSource: next.faviconSource,
-    enabled: next.recommendEnabled,
-    windowDays: next.recommendWindowDays,
-    mode: next.recommendMode,
+    faviconSource: settings.faviconSource,
+    enabled: settings.recommendEnabled,
+    windowDays: settings.recommendWindowDays,
+    mode: settings.recommendMode,
   });
-  if (persist) await saveSettings(next);
-  if (previous.faviconSource !== next.faviconSource) shortcuts.render();
+  if (persist) await saveSettings(settings);
+  if (previous.faviconSource !== settings.faviconSource) shortcuts.render();
+}
+
+function applyPageScale(value) {
+  $('#app').style.zoom = String(normalizePageScale(value) / 100);
 }
 
 async function importChromeBookmarks() {
@@ -382,20 +387,6 @@ function buildTarget(query) {
   return template.includes('%s')
     ? template.replace('%s', encodeURIComponent(query))
     : `${template}${encodeURIComponent(query)}`;
-}
-
-function initClock() {
-  const timeElement = $('#clock-time');
-  const dateElement = $('#clock-date');
-  const week = ['日', '一', '二', '三', '四', '五', '六'];
-  const update = () => {
-    const date = new Date();
-    const hour = date.getHours();
-    timeElement.textContent = `${String(hour).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-    dateElement.textContent = `${date.getMonth() + 1}月${date.getDate()}日 · 星期${week[date.getDay()]}`;
-  };
-  update();
-  setInterval(update, 1000);
 }
 
 function safeHost(url) {

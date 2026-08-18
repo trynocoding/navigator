@@ -13,6 +13,12 @@
     "128": "icons/icon128.png"
   },
   "optional_permissions": ["history", "bookmarks"],
+  "host_permissions": [
+    "https://cdn.simpleicons.org/*",
+    "https://icon.horse/*",
+    "https://www.google.com/*",
+    "https://icons.duckduckgo.com/*"
+  ],
   "permissions": ["storage", "favicon", "activeTab"],
   "action": {
     "default_title": "保存到 Navigator",

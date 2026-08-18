@@ -13,10 +13,12 @@ const KEYS = {
   importSnapshot: 'nv_import_snapshot',
   shortcutsBackup: 'nv_shortcuts_backup',
   shortcutsCorruptBackup: 'nv_shortcuts_corrupt_backup',
+  shortcutsRepairState: 'nv_shortcuts_repair_state',
 };
 
 const SHORTCUT_SCHEMA_VERSION = 2;
 const SHORTCUT_CHUNK_PREFIX = 'nv_shortcuts_v2_';
+const SHORTCUT_REPAIR_RETRY_MS = 6 * 60 * 60 * 1000;
 export const SHORTCUT_CHUNK_MAX_BYTES = 7000;
 
 export async function loadAll() {
@@ -27,7 +29,11 @@ export async function loadAll() {
       KEYS.shortcutsMeta,
       KEYS.blocked,
     ]),
-    chrome.storage.local.get([KEYS.customIcons, KEYS.shortcutsBackup]),
+    chrome.storage.local.get([
+      KEYS.customIcons,
+      KEYS.shortcutsBackup,
+      KEYS.shortcutsRepairState,
+    ]),
   ]);
 
   const loaded = await loadShortcutRecords(data, localData[KEYS.shortcutsBackup]);
@@ -36,6 +42,7 @@ export async function loadAll() {
     localData[KEYS.customIcons] || {},
   );
   const groups = normalizeGroups(loaded.groups);
+  let storageWarning = loaded.warning || '';
 
   // V1 的单键数据在读取成功后自动迁移。迁移失败不影响本次使用，
   // 原键也会保留，下一次启动仍可重试。
@@ -47,6 +54,31 @@ export async function loadAll() {
     }
   } else if (loaded.source === 'v2') {
     await saveLocalShortcutBackup(shortcuts, groups);
+  } else if (loaded.repairSync) {
+    const repairState = localData[KEYS.shortcutsRepairState];
+    const recentlyRepaired = repairState?.fingerprint === loaded.repairFingerprint
+      && Date.now() - Number(repairState.repairedAt || 0) < SHORTCUT_REPAIR_RETRY_MS;
+    if (recentlyRepaired) {
+      storageWarning = '';
+    } else {
+      try {
+        await saveShortcutState({ shortcuts, groups });
+        storageWarning = '';
+        try {
+          await chrome.storage.local.set({
+            [KEYS.shortcutsRepairState]: {
+              fingerprint: loaded.repairFingerprint,
+              repairedAt: Date.now(),
+            },
+          });
+        } catch (error) {
+          console.warn('[navigator] 同步副本已修复，但无法记录本机修复状态。', error);
+        }
+      } catch (error) {
+        console.warn('[navigator] 已从本机备份恢复，但暂时无法修复同步副本。', error);
+        storageWarning = `${storageWarning} 同步副本暂时无法修复，下次启动会再次尝试。`;
+      }
+    }
   }
 
   return {
@@ -54,7 +86,7 @@ export async function loadAll() {
     shortcuts,
     groups,
     blocked: data[KEYS.blocked] || [],
-    storageWarning: loaded.warning || '',
+    storageWarning,
   };
 }
 
@@ -221,11 +253,12 @@ async function recoverCorruptShortcutRecords(meta, error, localBackup) {
   }
 
   if (isLocalShortcutBackup(localBackup)) {
-    console.warn('[navigator] 快捷方式同步数据异常，已从本机备份恢复。', error);
     return {
       records: localBackup.shortcuts,
       groups: localBackup.groups,
       source: 'recovered',
+      repairSync: true,
+      repairFingerprint: shortcutRepairFingerprint(meta),
       warning: '检测到快捷方式同步数据异常，已从本机最近一次可用备份恢复；原始数据已保留在本机。',
     };
   }
@@ -397,6 +430,10 @@ function shortcutChecksum(records) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function shortcutRepairFingerprint(meta) {
+  return [meta.generation, meta.chunkCount, meta.count, meta.checksum].join(':');
 }
 
 function utf8Bytes(value) {

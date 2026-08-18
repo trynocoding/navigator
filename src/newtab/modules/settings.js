@@ -4,9 +4,11 @@ import {
   DEFAULT_SETTINGS,
   ENGINES,
   FAVICON_SOURCES,
+  PAGE_SCALE,
   RECOMMEND_MODES,
   RECOMMEND_WINDOWS,
   THEMES,
+  normalizePageScale,
 } from '../../shared/constants.js';
 import { exportAll, importAll } from '../../shared/storage.js';
 
@@ -37,6 +39,10 @@ export function openSettingsDialog(context, handlers) {
           <div class="form-row settings-inline-row">
             <label for="settings-accent">强调色</label>
             <div class="accent-row"><input id="settings-accent" name="accent" type="color" /><button type="button" class="btn-ghost" data-action="reset-accent">使用主题默认色</button></div>
+          </div>
+          <div class="form-row settings-inline-row">
+            <div class="scale-label"><label for="settings-page-scale">页面大小</label><output for="settings-page-scale" data-scale-value></output></div>
+            <div class="scale-control"><span>紧凑</span><input id="settings-page-scale" name="pageScale" type="range" min="${PAGE_SCALE.min}" max="${PAGE_SCALE.max}" step="${PAGE_SCALE.step}" /><span>宽松</span></div>
           </div>
         </section>
 
@@ -103,6 +109,7 @@ export function openSettingsDialog(context, handlers) {
   };
   (dlg.querySelector(`[name="theme"][value="${settings.theme}"]`) || dlg.querySelector('[name="theme"]')).checked = true;
   field('accent').value = settings.accent || '#5b6ff5';
+  field('pageScale').value = String(normalizePageScale(settings.pageScale));
   field('engine').value = settings.engine;
   field('customEngine').value = settings.customEngine;
   field('faviconSource').value = settings.faviconSource;
@@ -130,6 +137,10 @@ export function openSettingsDialog(context, handlers) {
     field('accent').value = '#5b6ff5';
   };
   field('accent').addEventListener('input', () => delete field('accent').dataset.reset);
+  const scaleValue = dlg.querySelector('[data-scale-value]');
+  const updateScaleValue = () => { scaleValue.textContent = `${field('pageScale').value}%`; };
+  field('pageScale').addEventListener('input', updateScaleValue);
+  updateScaleValue();
   dlg.querySelectorAll('[data-action="close"]').forEach((button) => { button.onclick = () => done(); });
 
   dlg.querySelector('[data-action="save"]').onclick = async () => {
@@ -137,6 +148,7 @@ export function openSettingsDialog(context, handlers) {
       ...settings,
       theme: dlg.querySelector('[name="theme"]:checked')?.value || DEFAULT_SETTINGS.theme,
       accent: field('accent').dataset.reset ? '' : field('accent').value,
+      pageScale: normalizePageScale(field('pageScale').value),
       engine: field('engine').value,
       customEngine: field('customEngine').value.trim() || DEFAULT_SETTINGS.customEngine,
       faviconSource: field('faviconSource').value,
