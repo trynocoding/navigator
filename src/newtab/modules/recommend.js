@@ -1,13 +1,18 @@
 // 自动推荐区：history 权限（可选）、频次评分、固定/屏蔽
 // 数据获取走 chrome.history，评分逻辑在 shared/scorer.js
 
-import { aggregateByOrigin, rankOrigins } from '../../shared/scorer.js';
+import {
+  aggregateByOrigin,
+  rankOrigins,
+  selectHistoryCandidates,
+} from '../../shared/scorer.js';
 import { makeIconEl } from '../../shared/favicon.js';
 import { saveBlocked } from '../../shared/storage.js';
 
 const WINDOW_DAYS = 30;
 const TOP_N = 12;
-const CANDIDATE_URLS = 60; // 初筛条数，逐条 getVisits 精确计算
+const CANDIDATE_ORIGINS = 60;
+const CANDIDATE_URLS_PER_ORIGIN = 2;
 
 export class Recommend {
   constructor(grid, hintEl, toggleBtn) {
@@ -132,16 +137,16 @@ export class Recommend {
   }
 }
 
-// 拉取 + 评分：search 初筛 -> getVisits 精确到每次访问时间 -> 衰减评分
-async function fetchRankedSites({ limit, windowDays, blocked, pinnedOrigins }) {
+// 拉取 + 评分：按 origin 平衡频次/近期性初筛 -> getVisits 精确计算 -> 衰减评分
+export async function fetchRankedSites({ limit, windowDays, blocked, pinnedOrigins }) {
   const now = Date.now();
   const startTime = now - windowDays * 86400000;
 
   const items = await chrome.history.search({ text: '', startTime, maxResults: 2000 });
-  const candidates = items
-    .filter((i) => i.url?.startsWith('http'))
-    .sort((a, b) => (b.lastVisitTime || 0) - (a.lastVisitTime || 0))
-    .slice(0, CANDIDATE_URLS);
+  const candidates = selectHistoryCandidates(items, {
+    maxOrigins: CANDIDATE_ORIGINS,
+    maxUrlsPerOrigin: CANDIDATE_URLS_PER_ORIGIN,
+  });
 
   const detailed = await Promise.all(
     candidates.map(async (c) => {

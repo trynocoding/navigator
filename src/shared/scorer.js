@@ -22,6 +22,85 @@ export function hostOfUrl(url) {
   }
 }
 
+/**
+ * 从 history.search 的 URL 级结果中选择需要进一步调用 getVisits 的候选。
+ * 同时保留高频 origin 与最近活跃 origin，并限制单个 origin 占用的 URL 数，
+ * 避免“最近 60 个页面”被同一网站或大量低频页面挤满。
+ */
+export function selectHistoryCandidates(
+  items,
+  { maxOrigins = 60, maxUrlsPerOrigin = 2, frequencyShare = 0.7 } = {},
+) {
+  if (maxOrigins <= 0 || maxUrlsPerOrigin <= 0) return [];
+
+  const uniqueUrls = new Map();
+  for (const item of items) {
+    const origin = originOf(item?.url);
+    if (!origin || !/^https?:$/.test(new URL(item.url).protocol)) continue;
+    const normalized = {
+      ...item,
+      origin,
+      visitCount: Math.max(0, Number(item.visitCount) || 0),
+      lastVisitTime: Math.max(0, Number(item.lastVisitTime) || 0),
+    };
+    const previous = uniqueUrls.get(item.url);
+    if (!previous
+      || normalized.visitCount > previous.visitCount
+      || normalized.lastVisitTime > previous.lastVisitTime) {
+      uniqueUrls.set(item.url, normalized);
+    }
+  }
+
+  const origins = new Map();
+  for (const item of uniqueUrls.values()) {
+    let group = origins.get(item.origin);
+    if (!group) {
+      group = { origin: item.origin, estimatedVisits: 0, lastVisitTime: 0, urls: [] };
+      origins.set(item.origin, group);
+    }
+    group.estimatedVisits += item.visitCount;
+    group.lastVisitTime = Math.max(group.lastVisitTime, item.lastVisitTime);
+    group.urls.push(item);
+  }
+
+  const groups = [...origins.values()];
+  const byFrequency = [...groups].sort(
+    (a, b) => b.estimatedVisits - a.estimatedVisits
+      || b.lastVisitTime - a.lastVisitTime
+      || a.origin.localeCompare(b.origin),
+  );
+  const byRecency = [...groups].sort(
+    (a, b) => b.lastVisitTime - a.lastVisitTime
+      || b.estimatedVisits - a.estimatedVisits
+      || a.origin.localeCompare(b.origin),
+  );
+
+  const targetCount = Math.min(maxOrigins, groups.length);
+  const frequencyCount = Math.min(
+    targetCount,
+    Math.max(0, Math.round(targetCount * Math.min(1, Math.max(0, frequencyShare)))),
+  );
+  const selected = byFrequency.slice(0, frequencyCount);
+  const selectedOrigins = new Set(selected.map((group) => group.origin));
+  for (const group of byRecency) {
+    if (selected.length >= targetCount) break;
+    if (!selectedOrigins.has(group.origin)) {
+      selected.push(group);
+      selectedOrigins.add(group.origin);
+    }
+  }
+
+  return selected.flatMap((group) =>
+    group.urls
+      .sort(
+        (a, b) => b.visitCount - a.visitCount
+          || b.lastVisitTime - a.lastVisitTime
+          || a.url.localeCompare(b.url),
+      )
+      .slice(0, maxUrlsPerOrigin),
+  );
+}
+
 // url 级明细 -> origin 级聚合
 export function aggregateByOrigin(entries) {
   const map = new Map();
@@ -33,8 +112,12 @@ export function aggregateByOrigin(entries) {
       item = { origin, host: hostOfUrl(e.url), visitTimes: [], titles: new Map() };
       map.set(origin, item);
     }
-    item.visitTimes.push(...(e.visitTimes || []));
-    if (e.title) item.titles.set(e.title, (item.titles.get(e.title) || 0) + 1);
+    const visitTimes = e.visitTimes || [];
+    item.visitTimes.push(...visitTimes);
+    if (e.title) {
+      const titleWeight = Math.max(1, visitTimes.length);
+      item.titles.set(e.title, (item.titles.get(e.title) || 0) + titleWeight);
+    }
   }
   return [...map.values()];
 }
